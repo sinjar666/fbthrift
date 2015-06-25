@@ -28,31 +28,33 @@
  */
 class t_set : public t_container {
  public:
-  explicit t_set(t_type* elem_type) :
-    elem_type_(elem_type) {}
+  t_set(t_type* elem_type, bool unordered) :
+    elem_type_(elem_type),
+    is_unordered_(unordered) {}
 
   t_type* get_elem_type() const {
     return elem_type_;
   }
 
-  bool is_set() const {
-    return true;
+  bool is_set() const override { return true; }
+
+  bool is_unordered() const {
+    return is_unordered_;
   }
 
-  virtual std::string get_full_name() const {
+  std::string get_full_name() const override {
     return "set<" + elem_type_->get_full_name() + ">";
   }
 
-  virtual std::string get_impl_full_name() const {
+  std::string get_impl_full_name() const override {
     return "set<" + elem_type_->get_impl_full_name() + ">";
   }
 
-  virtual TypeValue get_type_value() const {
-    return t_types::TYPE_SET;
-  }
+  TypeValue get_type_value() const override { return t_types::TYPE_SET; }
 
  private:
   t_type* elem_type_;
+  bool is_unordered_;
 };
 
 #endif

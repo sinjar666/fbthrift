@@ -27,6 +27,7 @@
 
 #include <thrift/lib/cpp2/async/StubSaslClient.h>
 #include <thrift/lib/cpp2/async/StubSaslServer.h>
+#include <thrift/lib/cpp2/TestServer.h>
 
 #include <boost/cast.hpp>
 #include <boost/lexical_cast.hpp>
@@ -45,7 +46,8 @@ using namespace folly;
 using facebook::concurrency::TEventBaseExecutor;
 
 class TestInterface : public FutureServiceSvIf {
-  Future<std::unique_ptr<std::string>> future_sendResponse(int64_t size) {
+  Future<std::unique_ptr<std::string>> future_sendResponse(
+      int64_t size) override {
     EXPECT_NE("", getConnectionContext()->getPeerAddress()->describe());
 
     MoveWrapper<Promise<std::unique_ptr<std::string> > > p;
@@ -64,7 +66,7 @@ class TestInterface : public FutureServiceSvIf {
     return std::move(f);
   }
 
-  Future<void> future_noResponse(int64_t size) {
+  Future<void> future_noResponse(int64_t size) override {
     MoveWrapper<Promise<void>> p;
     auto f = p->getFuture();
 
@@ -78,13 +80,13 @@ class TestInterface : public FutureServiceSvIf {
   }
 
   Future<std::unique_ptr<std::string>> future_echoRequest(
-    std::unique_ptr<std::string> req) {
+      std::unique_ptr<std::string> req) override {
     *req += "ccccccccccccccccccccccccccccccccccccccccccccc";
 
     return makeFuture<std::unique_ptr<std::string>>(std::move(req));
   }
 
-  Future<int> future_throwing() {
+  Future<int> future_throwing() override {
     Promise<int> p;
     auto f = p.getFuture();
 
@@ -96,30 +98,31 @@ class TestInterface : public FutureServiceSvIf {
 
     return std::move(f);
   }
+
+  Future<void> future_voidThrowing() override {
+    Promise<void> p;
+    auto f = p.getFuture();
+
+    Xception x;
+    x.errorCode = 42;
+    x.message = "test2";
+
+    p.setException(x);
+
+    return std::move(f);
+  }
 };
 
-std::shared_ptr<ThriftServer> getServer() {
-  auto server = std::make_shared<ThriftServer>();
-  server->setPort(0);
-  server->setInterface(std::unique_ptr<TestInterface>(new TestInterface));
-  server->setSaslEnabled(true);
-  server->setSaslServerFactory(
-    [] (apache::thrift::async::TEventBase* evb) {
-      return std::unique_ptr<SaslServer>(new StubSaslServer(evb));
-    }
-  );
-  return server;
-}
-
 void AsyncCpp2Test(bool enable_security) {
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *sst.getAddress()));
 
   auto client_channel = HeaderClientChannel::newChannel(socket);
   if (enable_security) {
-    client_channel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
+    client_channel->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
     client_channel->setSaslClient(std::unique_ptr<SaslClient>(
       new StubSaslClient(socket->getEventBase())
     ));
@@ -142,7 +145,8 @@ void AsyncCpp2Test(bool enable_security) {
 }
 
 TEST(ThriftServer, FutureExceptions) {
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *sst.getAddress()));
@@ -154,12 +158,17 @@ TEST(ThriftServer, FutureExceptions) {
   auto f = client.future_throwing().waitVia(&base);
 
   EXPECT_THROW(f.value(), Xception);
+
+  auto vf = client.future_voidThrowing().waitVia(&base);
+
+  EXPECT_THROW(vf.value(), Xception);
 }
 
 TEST(ThriftServer, FutureClientTest) {
   using std::chrono::steady_clock;
 
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   TEventBaseExecutor e(&base);
   std::shared_ptr<TAsyncSocket> socket(
@@ -220,7 +229,8 @@ TEST(ThriftServer, FutureClientTest) {
 TEST(ThriftServer, FutureGetOrderTest) {
   using std::chrono::steady_clock;
 
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   TEventBaseExecutor e(&base);
   std::shared_ptr<TAsyncSocket> socket(
@@ -260,7 +270,8 @@ TEST(ThriftServer, FutureGetOrderTest) {
 TEST(ThriftServer, OnewayFutureClientTest) {
   using std::chrono::steady_clock;
 
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *sst.getAddress()));

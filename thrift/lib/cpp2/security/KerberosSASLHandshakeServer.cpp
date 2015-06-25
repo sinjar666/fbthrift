@@ -30,7 +30,10 @@ using namespace folly;
 /**
  * Server functions.
  */
-KerberosSASLHandshakeServer::KerberosSASLHandshakeServer() : phase_(INIT) {
+KerberosSASLHandshakeServer::KerberosSASLHandshakeServer() :
+    phase_(INIT),
+    securityMech_(SecurityMech::KRB5_SASL) {
+
   // Set required security properties, we can define setters for these if
   // they need to be modified later.
   minimumRequiredSecContextFlags_ =
@@ -69,6 +72,19 @@ KerberosSASLHandshakeServer::~KerberosSASLHandshakeServer() {
   if (client_ != GSS_C_NO_NAME) {
     gss_release_name(&min_stat, &client_);
   }
+}
+
+void KerberosSASLHandshakeServer::setSecurityMech(const SecurityMech mech) {
+  securityMech_ = mech;
+  if (mech == SecurityMech::KRB5_GSS_NO_MUTUAL) {
+    minimumRequiredSecContextFlags_ &= ~GSS_C_MUTUAL_FLAG;
+  } else {
+    minimumRequiredSecContextFlags_ |= GSS_C_MUTUAL_FLAG;
+  }
+}
+
+SecurityMech KerberosSASLHandshakeServer::getSecurityMech() {
+  return securityMech_;
 }
 
 void KerberosSASLHandshakeServer::initServer() {
@@ -155,7 +171,9 @@ void KerberosSASLHandshakeServer::acceptSecurityContext() {
           minimumRequiredSecContextFlags_) {
       throw TKerberosException("Not all security properties established");
     }
-    phase_ = CONTEXT_NEGOTIATION_COMPLETE;
+    phase_ = (securityMech_ == SecurityMech::KRB5_GSS_NO_MUTUAL ||
+              securityMech_ == SecurityMech::KRB5_GSS)
+             ? COMPLETE : CONTEXT_NEGOTIATION_COMPLETE;
   }
 }
 
@@ -186,9 +204,22 @@ std::unique_ptr<std::string> KerberosSASLHandshakeServer::getTokenToSend() {
       break;
     }
     case COMPLETE:
-      // Send empty token back
-      return unique_ptr<string>(new string(""));
+    {
+      if (securityMech_ == SecurityMech::KRB5_GSS_NO_MUTUAL) {
+        // Don't send anything back to the client if we're not doing mutual auth
+        break;
+      }
+      // In the gss only case, we still want to send the token to the client,
+      // even if the server handshake completed.
+      if (securityMech_ == SecurityMech::KRB5_GSS) {
+        return unique_ptr<string>(
+          new string((const char*) outputToken_->value, outputToken_->length));
+      } else {
+        // Send empty token back
+        return unique_ptr<string>(new string(""));
+      }
       break;
+    }
     default:
       break;
   }

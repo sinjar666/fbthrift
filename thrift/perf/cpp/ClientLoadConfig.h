@@ -50,9 +50,9 @@ class ClientLoadConfig : public loadgen::WeightedLoadConfig {
 
   ClientLoadConfig();
 
-  virtual uint32_t pickOpsPerConnection();
-  virtual uint32_t getNumWorkerThreads() const;
-  virtual uint64_t getDesiredQPS() const;
+  uint32_t pickOpsPerConnection() override;
+  uint32_t getNumWorkerThreads() const override;
+  uint64_t getDesiredQPS() const override;
 
   virtual uint32_t getAsyncClients() const;
   virtual uint32_t getAsyncOpsPerClient() const;
@@ -104,6 +104,10 @@ class ClientLoadConfig : public loadgen::WeightedLoadConfig {
 
   std::string SASLPolicy() const;
   std::string SASLServiceTier() const;
+  std::string key() const;
+  std::string cert() const;
+  std::string trustedCAList() const;
+  std::string ciphers() const;
 
  private:
   uint32_t pickLogNormal(double mean, double sigma);

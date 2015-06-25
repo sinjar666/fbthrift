@@ -39,30 +39,24 @@ using std::string;
 
 class TestServiceHandler : public TestServiceIf {
  public:
-  virtual void sendResponse(string& _return, int64_t size) override {
+  void sendResponse(string& _return, int64_t size) override {
     _return = "test" + boost::lexical_cast<std::string>(size);
   }
 
-  virtual void noResponse(int64_t size) override {
-    usleep(size);
-  }
+  void noResponse(int64_t size) override { usleep(size); }
 
-  virtual void echoRequest(string& _return, const string& req) override {
+  void echoRequest(string& _return, const string& req) override {
     _return = req + "ccccccccccccccccccccccccccccccccccccccccccccc";
   }
 
-  virtual void serializationTest(string& _return, bool inEventBase) override {
+  void serializationTest(string& _return, bool inEventBase) override {
     _return = string(4096, 'a');
   }
 
-  virtual void eventBaseAsync(string& _return) override {
-    _return = "hello world";
-  }
+  void eventBaseAsync(string& _return) override { _return = "hello world"; }
 
-  virtual void notCalledBack() override {}
-  virtual void voidResponse() override {
-
-  }
+  void notCalledBack() override {}
+  void voidResponse() override {}
 };
 
 std::unique_ptr<ScopedServerThread> createHttpServer() {
@@ -87,7 +81,7 @@ TEST(HeaderClientChannelHttpTest, SimpleTest) {
   std::shared_ptr<TAsyncSocket> socket = TAsyncSocket::newSocket(&eb, *addr);
   std::unique_ptr<HeaderClientChannel, TDelayedDestruction::Destructor> channel(
       new HeaderClientChannel(socket));
-  channel->getHeader()->useAsHttpClient("127.0.0.1", "meh");
+  channel->useAsHttpClient("127.0.0.1", "meh");
   TestServiceAsyncClient client(std::move(channel));
   client.sendResponse(
     [] (apache::thrift::ClientReceiveState&& state) {
@@ -124,7 +118,7 @@ TEST(HeaderClientChannel, LongResponse) {
   std::shared_ptr<TAsyncSocket> socket = TAsyncSocket::newSocket(&eb, *addr);
   std::unique_ptr<HeaderClientChannel, TDelayedDestruction::Destructor> channel(
       new HeaderClientChannel(socket));
-  channel->getHeader()->useAsHttpClient("127.0.0.1", "meh");
+  channel->useAsHttpClient("127.0.0.1", "meh");
   TestServiceAsyncClient client(std::move(channel));
 
   client.serializationTest(

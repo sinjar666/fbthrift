@@ -42,7 +42,8 @@ using apache::thrift::concurrency::TooManyPendingTasksException;
 KerberosSASLHandshakeClient::KerberosSASLHandshakeClient(
     const std::shared_ptr<SecurityLogger>& logger) :
     phase_(INIT),
-    logger_(logger) {
+    logger_(logger),
+    securityMech_(SecurityMech::KRB5_SASL) {
 
   // Set required security properties, we can define setters for these if
   // they need to be modified later.
@@ -99,6 +100,15 @@ KerberosSASLHandshakeClient::~KerberosSASLHandshakeClient() {
   }
 }
 
+void KerberosSASLHandshakeClient::setSecurityMech(const SecurityMech mech) {
+  securityMech_ = mech;
+  if (mech == SecurityMech::KRB5_GSS_NO_MUTUAL) {
+    requiredFlags_ &= ~GSS_C_MUTUAL_FLAG;
+  } else {
+    requiredFlags_ |= GSS_C_MUTUAL_FLAG;
+  }
+}
+
 void KerberosSASLHandshakeClient::cleanUpState(
     gss_ctx_id_t context,
     gss_name_t target_name,
@@ -134,9 +144,9 @@ void KerberosSASLHandshakeClient::startClientHandshake() {
   OM_uint32 maj_stat, min_stat;
   context_ = GSS_C_NO_CONTEXT;
 
-  string service, addr;
+  string service, addr, ip;
   if (getRequiredServicePrincipal_) {
-    tie(service, addr) = (getRequiredServicePrincipal_)();
+    tie(service, addr, ip) = (getRequiredServicePrincipal_)();
   } else {
     size_t at = servicePrincipal_.find("@");
     if (at == string::npos) {
@@ -164,6 +174,12 @@ void KerberosSASLHandshakeClient::startClientHandshake() {
     addr,
     service);
   string princ_name = folly::to<string>(princ);
+
+  if (princ.getRealm().empty()) {
+    throw TKerberosException(
+      "Service principal invalid (empty realm). "
+      "princ_name=" + princ_name + " addr=" + addr + " ip=" + ip);
+  }
 
   gss_buffer_desc service_name_token;
   service_name_token.value = (void *)princ_name.c_str();
@@ -301,7 +317,9 @@ void KerberosSASLHandshakeClient::initSecurityContext() {
       throw TKerberosException("Not all security properties established");
     }
 
-    phase_ = CONTEXT_NEGOTIATION_COMPLETE;
+    phase_ = (securityMech_ == SecurityMech::KRB5_GSS_NO_MUTUAL ||
+              securityMech_ == SecurityMech::KRB5_GSS)
+             ? COMPLETE : CONTEXT_NEGOTIATION_COMPLETE;
   }
 }
 
@@ -312,10 +330,17 @@ std::unique_ptr<std::string> KerberosSASLHandshakeClient::getTokenToSend() {
       assert(false);
     case ESTABLISH_CONTEXT:
     case CONTEXT_NEGOTIATION_COMPLETE:
+    case COMPLETE:
     {
+      if (phase_ == COMPLETE &&
+          securityMech_ != SecurityMech::KRB5_GSS_NO_MUTUAL) {
+        // Complete state should only have a token to send if we're not doing
+        // mutual auth.
+        break;
+      }
       if (phase_ == ESTABLISH_CONTEXT) {
         logger_->logEnd("prepare_first_request");
-      } else {
+      } else if (phase_ == CONTEXT_NEGOTIATION_COMPLETE) {
         logger_->logEnd("prepare_second_request");
       }
       return unique_ptr<string>(
@@ -416,7 +441,8 @@ void KerberosSASLHandshakeClient::setRequiredClientPrincipal(
 }
 
 void KerberosSASLHandshakeClient::setRequiredServicePrincipalFetcher(
-  std::function<std::pair<std::string, std::string>()>&& function) {
+  std::function<std::tuple<std::string, std::string, std::string>()>&&
+    function) {
 
   assert(phase_ == INIT);
   getRequiredServicePrincipal_ = std::move(function);

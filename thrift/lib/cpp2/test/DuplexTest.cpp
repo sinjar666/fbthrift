@@ -30,6 +30,7 @@
 
 #include <thrift/lib/cpp2/async/StubSaslClient.h>
 #include <thrift/lib/cpp2/async/StubSaslServer.h>
+#include <thrift/lib/cpp2/TestServer.h>
 
 #include <boost/cast.hpp>
 #include <boost/lexical_cast.hpp>
@@ -71,7 +72,7 @@ private:
 
 class Updater {
 public:
-  Updater(DuplexClientAsyncClient* client,
+  Updater(shared_ptr<DuplexClientAsyncClient> client,
           TEventBase* eb,
           int32_t startIndex,
           int32_t numUpdates,
@@ -100,7 +101,7 @@ public:
     }
   }
 private:
-  DuplexClientAsyncClient* client_;
+  shared_ptr<DuplexClientAsyncClient> client_;
   TEventBase* eb_;
   int32_t startIndex_;
   int32_t numUpdates_;
@@ -121,7 +122,7 @@ class DuplexServiceInterface : public DuplexServiceSvIf {
     CHECK(eb != nullptr);
     if (numUpdates > 0) {
       Updater updater(client, eb, startIndex, numUpdates, interval);
-      eb->runInEventBaseThread([updater]() mutable {updater.update();});
+      eb->runInEventBaseThread([updater]() mutable { updater.update(); });
     };
     callbackp->resultInThread(true);
   }
@@ -132,24 +133,11 @@ class DuplexServiceInterface : public DuplexServiceSvIf {
   }
 };
 
-std::shared_ptr<ThriftServer> getServer() {
-  auto server = std::make_shared<ThriftServer>();
-  server->setPort(0);
-  server->setInterface(folly::make_unique<DuplexServiceInterface>());
-  server->setDuplex(true);
-  server->setSaslEnabled(true);
-  server->setSaslServerFactory(
-    [] (apache::thrift::async::TEventBase* evb) {
-      return std::unique_ptr<SaslServer>(new StubSaslServer(evb));
-    }
-  );
-  return server;
-}
-
-ScopedServerThread sst(getServer());
-
 TEST(Duplex, DuplexTest) {
   enum {START=1, COUNT=10, INTERVAL=5};
+  apache::thrift::TestThriftServerFactory<DuplexServiceInterface> factory;
+  factory.duplex(true);
+  ScopedServerThread sst(factory.create());
   TEventBase base;
 
   std::shared_ptr<TAsyncSocket> socket(
@@ -184,6 +172,9 @@ void testNonHeader() {
   using apache::thrift::transport::TSocket;
   using apache::thrift::protocol::TBinaryProtocol;
 
+  apache::thrift::TestThriftServerFactory<DuplexServiceInterface> factory;
+  factory.duplex(true);
+  ScopedServerThread sst(factory.create());
   auto socket = make_shared<TSocket>(*sst.getAddress());
   auto transport = make_shared<Transport>(socket);
   auto protocol = make_shared<TBinaryProtocol>(transport);

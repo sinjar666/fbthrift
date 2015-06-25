@@ -26,7 +26,7 @@
 #include <thrift/lib/cpp/concurrency/PosixThreadFactory.h>
 #include <thrift/lib/cpp2/protocol/MessageSerializer.h>
 #include <thrift/lib/cpp2/gen-cpp2/Sasl_types.h>
-#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.h>
+#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.tcc>
 #include <thrift/lib/cpp2/security/KerberosSASLHandshakeServer.h>
 #include <thrift/lib/cpp2/security/KerberosSASLHandshakeUtils.h>
 
@@ -51,7 +51,9 @@ using apache::thrift::sasl::SaslAuthService_authNextRequest_presult;
 
 namespace apache { namespace thrift {
 
-static const char MECH[] = "krb5";
+static const char KRB5_SASL[] = "krb5";
+static const char KRB5_GSS[] = "gss";
+static const char KRB5_GSS_NO_MUTUAL[] = "gssnm";
 
 GssSaslServer::GssSaslServer(
     apache::thrift::async::TEventBase* evb,
@@ -86,12 +88,13 @@ void GssSaslServer::consumeFromClient(
       int requestSeqId;
 
       bool isFirstRequest;
+      string selectedMech;
       if (serverHandshake->getPhase() == INIT) {
         isFirstRequest = true;
 
         SaslStart start;
         SaslAuthService_authFirstRequest_pargs pargs;
-        pargs.saslStart = &start;
+        pargs.get<0>().value = &start;
         ex = folly::try_and_catch<std::exception>([&]() {
           string methodName;
           try {
@@ -119,8 +122,33 @@ void GssSaslServer::consumeFromClient(
           if (methodName != "authFirstRequest") {
             throw TKerberosException("Bad Thrift first call: " + methodName);
           }
-          if (start.mechanism != MECH) {
-            throw TKerberosException("Unknown mechanism: " + start.mechanism);
+          vector<string> mechs;
+          if (start.__isset.mechanisms) {
+            mechs = start.mechanisms;
+          }
+          mechs.push_back(start.mechanism);
+
+          for (const auto& mech : mechs) {
+            if (mech == KRB5_SASL) {
+              selectedMech = KRB5_SASL;
+              serverHandshake->setSecurityMech(SecurityMech::KRB5_SASL);
+              break;
+            } else if (mech == KRB5_GSS) {
+              selectedMech = KRB5_GSS;
+              serverHandshake->setSecurityMech(SecurityMech::KRB5_GSS);
+              break;
+            } else if (mech == KRB5_GSS_NO_MUTUAL) {
+              selectedMech = KRB5_GSS_NO_MUTUAL;
+              serverHandshake->setSecurityMech(
+                SecurityMech::KRB5_GSS_NO_MUTUAL);
+              break;
+            }
+          }
+
+          // Fall back to SASL if no known mechanisms were passed.
+          if (selectedMech.empty()) {
+            selectedMech = KRB5_SASL;
+            serverHandshake->setSecurityMech(SecurityMech::KRB5_SASL);
           }
 
           input = start.request.response;
@@ -130,7 +158,7 @@ void GssSaslServer::consumeFromClient(
 
         SaslRequest req;
         SaslAuthService_authNextRequest_pargs pargs;
-        pargs.saslRequest = &req;
+        pargs.get<0>().value = &req;
         ex = folly::try_and_catch<std::exception>([&]() {
           string methodName;
           try {
@@ -183,11 +211,21 @@ void GssSaslServer::consumeFromClient(
             } else {
               reply.outcome.success = true;
               reply.__isset.outcome = true;
+              // We still need to send the token even when completed.
+              if (serverHandshake->getSecurityMech() ==
+                  SecurityMech::KRB5_GSS) {
+                reply.challenge = *token;
+                reply.__isset.challenge = true;
+              }
+            }
+            if (!selectedMech.empty()) {
+              reply.mechanism = selectedMech;
+              reply.__isset.mechanism = true;
             }
             if (isFirstRequest) {
               SaslAuthService_authFirstRequest_presult resultp;
-              resultp.success = &reply;
-              resultp.__isset.success = true;
+              resultp.get<0>().value = &reply;
+              resultp.setIsSet(0);
               *outbuf = PargsPresultProtoSerialize(replyWithProto,
                                                    resultp,
                                                    "authFirstRequest",
@@ -195,8 +233,8 @@ void GssSaslServer::consumeFromClient(
                                                    requestSeqId);
             } else {
               SaslAuthService_authNextRequest_presult resultp;
-              resultp.success = &reply;
-              resultp.__isset.success = true;
+              resultp.get<0>().value = &reply;
+              resultp.setIsSet(0);
               *outbuf = PargsPresultProtoSerialize(replyWithProto,
                                                    resultp,
                                                    "authNextRequest",

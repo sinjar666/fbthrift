@@ -55,6 +55,7 @@ thrift1_SOURCES = main.cc \
                  parse/t_list.h \
                  parse/t_set.h \
                  parse/t_map.h \
+                 parse/t_stream.h \
                  parse/t_struct.h \
                  parse/t_field.h \
                  parse/t_service.h \
@@ -75,6 +76,7 @@ thrift1_SOURCES += generate/t_cpp_generator.cc \
                   generate/t_rb_generator.cc \
                   generate/t_perl_generator.cc \
                   generate/t_php_generator.cc \
+                  generate/t_hack_generator.cc \
                   generate/t_erl_generator.cc \
                   generate/t_cocoa_generator.cc \
                   generate/t_st_generator.cc \

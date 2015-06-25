@@ -32,39 +32,42 @@ namespace apache { namespace thrift {
 class StubSaslClient : public SaslClient {
 public:
   explicit StubSaslClient(apache::thrift::async::TEventBase*,
-    const std::shared_ptr<SecurityLogger>& logger = nullptr);
-  virtual void start(Callback *cb);
-  virtual void consumeFromServer(
-    Callback *cb, std::unique_ptr<folly::IOBuf>&& message);
+    const std::shared_ptr<SecurityLogger>& logger = nullptr,
+    int forceMsSpentPerRTT = 0);
+  void start(Callback* cb) override;
+  void consumeFromServer(Callback* cb,
+                         std::unique_ptr<folly::IOBuf>&& message) override;
   virtual std::unique_ptr<folly::IOBuf> wrap(std::unique_ptr<folly::IOBuf>&&);
   virtual std::unique_ptr<folly::IOBuf> unwrap(
     folly::IOBufQueue* q, size_t* remaining);
-  virtual void setClientIdentity(const std::string& identity) {}
-  virtual void setServiceIdentity(const std::string& identity) {}
-  virtual std::string getClientIdentity() const;
-  virtual std::string getServerIdentity() const;
-  virtual std::unique_ptr<folly::IOBuf> encrypt(
-    std::unique_ptr<folly::IOBuf>&& buf) {
+  void setClientIdentity(const std::string& identity) override {}
+  void setServiceIdentity(const std::string& identity) override {}
+  std::string getClientIdentity() const override;
+  std::string getServerIdentity() const override;
+  std::unique_ptr<folly::IOBuf> encrypt(
+      std::unique_ptr<folly::IOBuf>&& buf) override {
     return std::move(buf);
   }
-  virtual std::unique_ptr<folly::IOBuf> decrypt(
-    std::unique_ptr<folly::IOBuf>&& buf) {
+  std::unique_ptr<folly::IOBuf> decrypt(
+      std::unique_ptr<folly::IOBuf>&& buf) override {
     return std::move(buf);
   }
 
   // This is for testing.
   void setForceFallback() { forceFallback_ = true; }
+  void setForceTimeout() { forceTimeout_ = true; }
+  void setForceMsSpentPerRTT(int t) { forceMsSpentPerRTT_ = t; }
 
-  const std::string* getErrorString() const {
-    return nullptr;
-  }
+  const std::string* getErrorString() const override { return nullptr; }
 
-  void setErrorString(const std::string& str) {}
+  void setErrorString(const std::string& str) override {}
 
 private:
   std::shared_ptr<apache::thrift::concurrency::ThreadManager> threadManager_;
   int phase_;
   bool forceFallback_;
+  bool forceTimeout_;
+  int forceMsSpentPerRTT_;  // milliseconds
 };
 
 }} // apache::thrift

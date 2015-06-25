@@ -82,10 +82,16 @@ class KerberosSASLHandshakeClient {
     void setRequiredClientPrincipal(const std::string& client);
 
     /**
+     * Set the security mechanism
+     */
+    void setSecurityMech(const SecurityMech mech);
+
+    /**
      * Set the the function that grabs the required service principal.
      */
     void setRequiredServicePrincipalFetcher(
-      std::function<std::pair<std::string, std::string>()>&& function);
+      std::function<std::tuple<std::string, std::string, std::string>()>&&
+        function);
 
     /**
      * Get service / client principals. Only call these after the handshake
@@ -123,7 +129,7 @@ class KerberosSASLHandshakeClient {
 
     std::string clientPrincipal_;
     std::string servicePrincipal_;
-    std::function<std::pair<std::string, std::string>()>
+    std::function<std::tuple<std::string, std::string, std::string>()>
       getRequiredServicePrincipal_;
 
     // Some data about the context after it is established
@@ -158,6 +164,8 @@ class KerberosSASLHandshakeClient {
     std::shared_ptr<krb5::Krb5CredentialsCacheManager>
       credentialsCacheManager_;
     std::shared_ptr<SecurityLogger> logger_;
+
+    SecurityMech securityMech_;
 };
 
 }}  // apache::thrift

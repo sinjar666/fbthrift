@@ -90,20 +90,20 @@ class t_py_generator : public t_generator {
    * Init and close methods
    */
 
-  void init_generator();
-  void close_generator();
+  void init_generator() override;
+  void close_generator() override;
 
   /**
    * Program-level generation functions
    */
 
-  void generate_typedef  (t_typedef*  ttypedef);
-  void generate_enum     (t_enum*     tenum);
-  void generate_const    (t_const*    tconst);
-  void generate_struct   (t_struct*   tstruct);
-  void generate_forward_declaration   (t_struct*   tstruct);
-  void generate_xception (t_struct*   txception);
-  void generate_service  (t_service*  tservice);
+  void generate_typedef(t_typedef* ttypedef) override;
+  void generate_enum(t_enum* tenum) override;
+  void generate_const(t_const* tconst) override;
+  void generate_struct(t_struct* tstruct) override;
+  void generate_forward_declaration(t_struct* tstruct) override;
+  void generate_xception(t_struct* txception) override;
+  void generate_service(t_service* tservice) override;
 
   std::string render_const_value(t_type* type, t_const_value* value);
 
@@ -113,6 +113,9 @@ class t_py_generator : public t_generator {
 
   void generate_py_struct(t_struct* tstruct, bool is_exception);
   void generate_py_thrift_spec(std::ofstream& out, t_struct* tstruct, bool is_exception);
+  void generate_py_string_dict(std::ofstream& out,
+                               const std::map<string, string>& fields);
+  void generate_py_annotations(std::ofstream& out, t_struct* tstruct);
   void generate_py_union(std::ofstream& out, t_struct* tstruct);
   void generate_py_struct_definition(std::ofstream& out, t_struct* tstruct,
       bool is_xception=false, bool is_result=false);
@@ -128,6 +131,7 @@ class t_py_generator : public t_generator {
   void generate_service_interface (t_service* tservice, bool with_context);
   void generate_service_client    (t_service* tservice);
   void generate_service_remote    (t_service* tservice);
+  void generate_service_fuzzer    (t_service* tservice);
   void generate_service_server    (t_service* tservice, bool with_context);
   void generate_process_function  (t_service* tservice, t_function* tfunction,
                                    bool with_context);
@@ -232,16 +236,25 @@ class t_py_generator : public t_generator {
   void generate_json_reader          (std::ofstream& out,
                                       t_struct* tstruct);
 
+  void generate_fastbinary_read       (std::ofstream& out,
+                                      t_struct* tstruct);
+  void generate_fastbinary_write      (std::ofstream& out,
+                                      t_struct* tstruct);
+  void generate_fastproto_read       (std::ofstream& out,
+                                      t_struct* tstruct);
+  void generate_fastproto_write      (std::ofstream& out,
+                                      t_struct* tstruct);
+
   /**
    * Helper rendering functions
    */
 
   std::string py_autogen_comment();
-  std::string py_remote_warning();
+  std::string py_par_warning(string service_tool_name);
   std::string py_imports();
   std::string rename_reserved_keywords(const std::string& value);
   std::string render_includes();
-  std::string render_fastbinary_includes();
+  std::string render_fastbinary_and_fastproto_includes();
   std::string declare_argument(std::string structname, t_field* tfield);
   std::string render_field_default_value(t_field* tfield);
   std::string type_name(t_type* ttype);
@@ -663,7 +676,8 @@ void t_py_generator::generate_json_reader(ofstream& out,
     if ((*f_iter)->get_req() == t_field::T_REQUIRED) {
       indent(out) << "else:" << endl;
       indent_up();
-      indent(out) << "raise TProtocolException('Required field "
+      indent(out) << "raise TProtocolException("
+        << "TProtocolException.MISSING_REQUIRED_FIELD, 'Required field "
         << (*f_iter)->get_name()
         << " was not found!')"
         << endl;
@@ -733,7 +747,7 @@ void t_py_generator::init_generator() {
     py_autogen_comment() << endl <<
     py_imports() << endl <<
     render_includes() << endl <<
-    render_fastbinary_includes() <<
+    render_fastbinary_and_fastproto_includes() <<
     "all_structs = []" << endl <<
     "UTF8STRINGS = bool(" << gen_utf8strings_ << ") or " <<
     "sys.version_info.major >= 3" << endl << endl;
@@ -772,8 +786,9 @@ string t_py_generator::render_includes() {
 
 /**
  * Renders all the imports necessary to use the accelerated TBinaryProtocol
+ * or fastproto.
  */
-string t_py_generator::render_fastbinary_includes() {
+string t_py_generator::render_fastbinary_and_fastproto_includes() {
   // In the try block below, we disable fastbinary if either
   // 'version' is not defined (causing an exception), or if it is defined
   // and has an old value.  Warn if it is an old value.
@@ -788,10 +803,14 @@ string t_py_generator::render_fastbinary_includes() {
     "try:\n"
     "  from thrift.protocol import fastbinary\n"
     "  if fastbinary.version < 2:\n"
-    "     fastbinary = None\n"
-    "     warnings.warn(\"Disabling fastbinary, need at least version 2\")\n"
+    "    fastbinary = None\n"
+    "    warnings.warn(\"Disabling fastbinary, need at least version 2\")\n"
     "except:\n"
-    "  fastbinary = None\n";
+    "  fastbinary = None\n"
+    "try:\n"
+    "  from thrift.protocol import fastproto\n"
+    "except:\n"
+    "  fastproto = None\n";
 }
 
 /**
@@ -808,11 +827,9 @@ string t_py_generator::py_autogen_comment() {
 }
 
 /**
- * Print out warning message in the case that *-remote.py is ran instead of
- * running *-remote.par
+ * Print out warning message in the case a *.py is running instead of *.par
  */
-
-string t_py_generator::py_remote_warning() {
+string t_py_generator::py_par_warning(string service_tool_name) {
   return
     "if (not sys.argv[0].endswith(\"par\") and\n"
     "    os.getenv('PAR_UNPACK_TMP') == None):\n"
@@ -827,14 +844,15 @@ string t_py_generator::py_remote_warning() {
     "    # second line. See fbcode/tools/make_par/make_par.py\n"
     "    if (not line.startswith('# This par was made')):\n"
     "        print(\"\"\"WARNING\n"
-    "        You are trying to run *-remote.py which is incorrect as the\n"
-    "        paths are not set up correctly. Instead, you should generate\n"
-    "        your thrift files with thrift_library and then run the\n"
-    "        resulting *-remote.par.\n"
+    "        You are trying to run *-"+service_tool_name+".py which is\n"
+    "        incorrect as the paths are not set up correctly.\n"
+    "        Instead, you should generate your thrift file with\n"
+    "        thrift_library and then run the resulting\n"
+    "        *-"+service_tool_name+".par.\n"
     "        For more information, please read\n"
     "        http://fburl.com/python-remotes\"\"\")\n"
     "        exit()\n";
-}
+ }
 
 /**
  * Prints standard thrift imports
@@ -1046,6 +1064,8 @@ string t_py_generator::render_const_value(t_type* type, t_const_value* value) {
 void t_py_generator::generate_forward_declaration(t_struct* tstruct) {
   if (!tstruct->is_union()) {
     generate_py_struct(tstruct, tstruct->is_xception());
+  } else {
+    generate_py_union(f_types_, tstruct);
   }
 }
 
@@ -1053,10 +1073,6 @@ void t_py_generator::generate_forward_declaration(t_struct* tstruct) {
  * Generates a python struct
  */
 void t_py_generator::generate_struct(t_struct* tstruct) {
-  if (tstruct->is_union()) {
-    generate_py_union(f_types_, tstruct);
-  }
-
   generate_py_thrift_spec(f_types_, tstruct, false);
 }
 
@@ -1129,20 +1145,31 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
 
   // Method to get the stored type
   indent(out) << "def getType(self):" << endl;
-  indent(out) << "  return self.field" << endl;
+  indent(out) << "  return self.field" << endl << endl;
 
-  // Printing utilities so that on the command line thrift
-  // structs look somewhat human readable
+  // According to Python doc, __repr__() "should" return a valid expression
+  // such that `object == eval(object.__repr__())` is true. Otherwise
+  // just print some useful description
   out <<
     indent() << "def __repr__(self):" << endl <<
-    indent() << "  L = []" << endl <<
-    indent() << "  for key, value in six.iteritems(self.__dict__):" << endl <<
-    indent() << "    padding = ' ' * (len(key) + 1)" << endl <<
-    indent() << "    value = pprint.pformat(value)" << endl <<
-    indent() << "    value = padding.join(value.splitlines(True))" << endl <<
-    indent() << "    L.append('    %s=%s' % (key, value))" << endl <<
-    indent() << "  return \"%s(\\n%s)\" % (self.__class__.__name__, "
-             << "\",\\n\".join(L))" << endl << endl;
+    indent() << "  value = pprint.pformat(self.value)" << endl <<
+    indent() << "  member = ''" << endl;
+  for (auto& member: sorted_members) {
+    auto key = rename_reserved_keywords(member->get_name());
+    out <<
+      indent() << "  if self.field == " << member->get_key() << ":" << endl <<
+      indent() << "    padding = ' ' * "<< key.size() + 1 << endl <<
+      indent() << "    value = padding.join(value.splitlines(True))" << endl <<
+      indent() << "    member = '\\n    %s=%s' % ('" << key
+               << "', value)" << endl;
+  }
+  // This will generate
+  //   UnionClass()  or
+  //   UnionClass(
+  //       key=value)
+  out <<
+    indent() << "  return \"%s(%s)\" % (self.__class__.__name__, member)"
+             << endl << endl;
 
   // Generate `read` method
   indent(out) << "def read(self, iprot):" << endl;
@@ -1150,6 +1177,11 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
 
   indent(out) << "self.field = 0" << endl;
   indent(out) << "self.value = None" << endl;
+
+  // fastbinary doesn't support union (we could add it, but it should
+  // be deprecated by fastproto)
+  generate_fastproto_read(out, tstruct);
+
   indent(out) << "iprot.readStructBegin()" << endl;
   indent(out) << "while True:" << endl;
   indent_up();
@@ -1192,6 +1224,9 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
   indent(out) << "def write(self, oprot):" << endl;
   indent_up();
 
+  // fastbinary doesn't support union
+  generate_fastproto_write(out, tstruct);
+
   indent(out) << "oprot.writeUnionBegin('" << tstruct->get_name()
               << "')" << endl;
 
@@ -1230,7 +1265,8 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
     indent_down();
 
     indent(out) << "if not isinstance(obj, dict) or len(obj) > 1:" << endl;
-    indent(out) << "  raise TProtocolException('Can not parse')" << endl;
+    indent(out) << "  raise TProtocolException("
+                << "TProtocolException.INVALID_DATA, 'Can not parse')" << endl;
     indent(out) << endl;
 
     for (auto& member: members) {
@@ -1312,6 +1348,8 @@ void t_py_generator::generate_py_thrift_spec(ofstream& out,
   indent_down();
   indent(out) << ")" << endl << endl;
 
+  generate_py_annotations(out, tstruct);
+
   if (members.size() > 0) {
     out <<
       indent() << "def " << rename_reserved_keywords(tstruct->get_name())
@@ -1366,8 +1404,50 @@ void t_py_generator::generate_py_thrift_spec(ofstream& out,
                << rename_reserved_keywords(tstruct->get_name())
                << "__init__" << endl << endl;
   }
-
 }
+
+void t_py_generator::generate_py_string_dict(
+                                      std::ofstream& out,
+                                      const map<string, string>& fields) {
+  map<string, string>::const_iterator a_iter;
+  indent_up();
+  for (a_iter = fields.begin(); a_iter != fields.end(); ++a_iter) {
+    indent(out) << "'" << a_iter->first << "': \"\"\""
+                << a_iter->second << "\"\"\"," << endl;
+  }
+  indent_down();
+}
+
+void t_py_generator::generate_py_annotations(std::ofstream& out,
+                                             t_struct* tstruct) {
+  const vector<t_field*>& members = tstruct->get_members();
+  const vector<t_field*>& sorted_members = tstruct->get_sorted_members();
+  vector<t_field*>::const_iterator m_iter;
+
+  indent(out) << rename_reserved_keywords(tstruct->get_name())
+              << ".thrift_struct_annotations = {" << endl;
+  generate_py_string_dict(out, tstruct->annotations_);
+  indent(out) << "}" << endl;
+
+  indent(out) << rename_reserved_keywords(tstruct->get_name())
+              << ".thrift_field_annotations = {" << endl;
+  indent_up();
+
+  int sorted_keys_pos = 0;
+  for (m_iter = sorted_members.begin(); m_iter != sorted_members.end();
+      ++m_iter) {
+    const t_field* field = *m_iter;
+    if (field->annotations_.empty()) {
+      continue;
+    }
+    indent(out) << field->get_key() << ": {" << endl;
+    generate_py_string_dict(out, field->annotations_);
+    indent(out) << "}," << endl;
+  }
+  indent_down();
+  indent(out) << "}" << endl << endl;
+}
+
 
 /**
  * Generates a struct definition for a thrift data type.
@@ -1398,7 +1478,8 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
   out << endl;
 
   /*
-     Here we generate the structure specification for the fastbinary codec.
+     Here we generate the structure specification for the fastbinary/fastproto
+     codec.
      These specifications have the following structure:
      thrift_spec -> tuple of item_spec
      item_spec -> None | (tag, type_enum, name, spec_args, default)
@@ -1412,6 +1493,7 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
                 | (type_enum, spec_args, type_enum, spec_args)
                   # Key and value for map
                 | [class_name, spec_args_ptr, is_union] # For struct/exception
+                | class_name for Enums
      class_name -> identifier  # Basically a pointer to the class
      spec_args_ptr -> expression  # just class_name.spec_args
   */
@@ -1432,6 +1514,8 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
   // TODO(dreiss): Test encoding of structs where some inner structs
   // don't have thrift_spec.
   indent(out) << "thrift_spec = None" << endl;
+  indent(out) << "thrift_field_annotations = None" << endl;
+  indent(out) << "thrift_struct_annotations = None" << endl;
   if (members.size() != 0) {
     indent(out) << "__init__ = None" << endl;
   }
@@ -1539,18 +1623,88 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
   indent_down();
 }
 
-/**
- * Generates the read method for a struct
- */
-void t_py_generator::generate_py_struct_reader(ofstream& out,
-                                                t_struct* tstruct) {
-  const vector<t_field*>& fields = tstruct->get_members();
-  vector<t_field*>::const_iterator f_iter;
-
+void t_py_generator::generate_fastproto_write(ofstream& out,
+                                              t_struct* tstruct) {
   indent(out) <<
-    "def read(self, iprot):" << endl;
+    "if (oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
+    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "oprot.get_protocol_id() == "
+    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
+    "and self.thrift_spec is not None "
+    "and fastproto is not None:" << endl;
   indent_up();
 
+  indent(out) <<
+    "oprot.trans.write(fastproto.encode(self, " <<
+    "[self.__class__, self.thrift_spec, " <<
+    (tstruct->is_union() ? "True" : "False") << "], " <<
+    "utf8strings=UTF8STRINGS, protoid=0))" << endl;
+  indent(out) <<
+    "return" << endl;
+
+  indent_down();
+  indent(out) <<
+    "if (oprot.__class__ == TCompactProtocol.TCompactProtocolAccelerated "
+    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "oprot.get_protocol_id() == "
+    "THeaderProtocol.THeaderProtocol.T_COMPACT_PROTOCOL)) "
+    "and self.thrift_spec is not None "
+    "and fastproto is not None:" << endl;
+  indent_up();
+
+  indent(out) <<
+    "oprot.trans.write(fastproto.encode(self, " <<
+    "[self.__class__, self.thrift_spec, " <<
+    (tstruct->is_union() ? "True" : "False") << "], " <<
+    "utf8strings=UTF8STRINGS, protoid=2))" << endl;
+  indent(out) <<
+    "return" << endl;
+  indent_down();
+}
+
+void t_py_generator::generate_fastproto_read(ofstream& out,
+                                             t_struct* tstruct) {
+  indent(out) <<
+    "if (iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
+    "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "iprot.get_protocol_id() == "
+    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
+    "and isinstance(iprot.trans, TTransport.CReadableTransport) "
+    "and self.thrift_spec is not None "
+    "and fastproto is not None:" << endl;
+  indent_up();
+
+  indent(out) <<
+    "fastproto.decode(self, iprot.trans, " <<
+    "[self.__class__, self.thrift_spec, " <<
+    (tstruct->is_union() ? "True" : "False") << "], " <<
+    "utf8strings=UTF8STRINGS, protoid=0)" << endl;
+  indent(out) <<
+    "return" << endl;
+  indent_down();
+
+  indent(out) <<
+    "if (iprot.__class__ == TCompactProtocol.TCompactProtocolAccelerated "
+    "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "iprot.get_protocol_id() == "
+    "THeaderProtocol.THeaderProtocol.T_COMPACT_PROTOCOL)) "
+    "and isinstance(iprot.trans, TTransport.CReadableTransport) "
+    "and self.thrift_spec is not None "
+    "and fastproto is not None:" << endl;
+  indent_up();
+
+  indent(out) <<
+    "fastproto.decode(self, iprot.trans, " <<
+    "[self.__class__, self.thrift_spec, " <<
+    (tstruct->is_union() ? "True" : "False") << "], " <<
+    "utf8strings=UTF8STRINGS, protoid=2)" << endl;
+  indent(out) <<
+    "return" << endl;
+  indent_down();
+}
+
+void t_py_generator::generate_fastbinary_read(ofstream& out,
+                                              t_struct* tstruct) {
   indent(out) <<
     "if (iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
     "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
@@ -1565,10 +1719,45 @@ void t_py_generator::generate_py_struct_reader(ofstream& out,
     "fastbinary.decode_binary(self, iprot.trans, " <<
     "[self.__class__, self.thrift_spec, False], " <<
     "utf8strings=UTF8STRINGS)" << endl;
-
   indent(out) <<
     "return" << endl;
   indent_down();
+}
+
+void t_py_generator::generate_fastbinary_write(ofstream& out,
+                                               t_struct* tstruct) {
+  indent(out) <<
+    "if (oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
+    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "oprot.get_protocol_id() == "
+    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
+    "and self.thrift_spec is not None "
+    "and fastbinary is not None:" << endl;
+  indent_up();
+
+  indent(out) <<
+    "oprot.trans.write(fastbinary.encode_binary(self, " <<
+    "[self.__class__, self.thrift_spec, False], "
+    "utf8strings=UTF8STRINGS))" << endl;
+  indent(out) <<
+    "return" << endl;
+  indent_down();
+}
+
+/**
+ * Generates the read method for a struct
+ */
+void t_py_generator::generate_py_struct_reader(ofstream& out,
+                                                t_struct* tstruct) {
+  const vector<t_field*>& fields = tstruct->get_members();
+  vector<t_field*>::const_iterator f_iter;
+
+  indent(out) <<
+    "def read(self, iprot):" << endl;
+  indent_up();
+
+  generate_fastbinary_read(out, tstruct);
+  generate_fastproto_read(out, tstruct);
 
   indent(out) <<
     "iprot.readStructBegin()" << endl;
@@ -1663,22 +1852,8 @@ void t_py_generator::generate_py_struct_writer(ofstream& out,
     "def write(self, oprot):" << endl;
   indent_up();
 
-  indent(out) <<
-    "if (oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
-    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
-    "oprot.get_protocol_id() == "
-    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
-    "and self.thrift_spec is not None "
-    "and fastbinary is not None:" << endl;
-  indent_up();
-
-  indent(out) <<
-    "oprot.trans.write(fastbinary.encode_binary(self, " <<
-    "[self.__class__, self.thrift_spec, False], "
-    "utf8strings=UTF8STRINGS))" << endl;
-  indent(out) <<
-    "return" << endl;
-  indent_down();
+  generate_fastbinary_write(out, tstruct);
+  generate_fastproto_write(out, tstruct);
 
   indent(out) <<
     "oprot.writeStructBegin('" << name << "')" << endl;
@@ -1750,7 +1925,7 @@ void t_py_generator::generate_service(t_service* tservice) {
   f_service_ <<
     "from .ttypes import *" << endl <<
     "from thrift.Thrift import TProcessor" << endl <<
-    render_fastbinary_includes() << endl <<
+    render_fastbinary_and_fastproto_includes() << endl <<
     "all_structs = []" << endl <<
     "UTF8STRINGS = bool(" << gen_utf8strings_ << ") or " <<
     "sys.version_info.major >= 3" << endl;
@@ -1781,6 +1956,7 @@ void t_py_generator::generate_service(t_service* tservice) {
   generate_service_server(tservice, true);
   generate_service_helpers(tservice);
   generate_service_remote(tservice);
+  generate_service_fuzzer(tservice);
 
   // Close service file
   f_service_ << "fix_spec(all_structs)" << endl
@@ -2256,40 +2432,26 @@ void t_py_generator::generate_service_remote(t_service* tservice) {
     py_autogen_comment() << "\n"
     "from __future__ import print_function\n"
     "from __future__ import absolute_import\n"
-    "import optparse\n"
+    "\n"
     "import os\n"
-    "import pprint\n"
     "import sys\n"
-    "import traceback\n"
-    "from six.moves.urllib.parse import urlparse\n"
     "\n" <<
     // This has to be before thrift definitions
     // in case the environment is not correct.
-    py_remote_warning() <<
-    "\n"
-    "from thrift.transport import TTransport\n"
-    "from thrift.transport import TSocket\n"
-    "from thrift.transport import TSSLSocket\n"
-    "from thrift.transport import THttpClient\n"
-    "from thrift.protocol import TBinaryProtocol\n"
-    "from thrift.protocol import TJSONProtocol\n"
-    "from thrift.protocol import THeaderProtocol\n"
+    py_par_warning("remote") <<
+    // Import the service module and types
     "\n"
     << "from . import "
     << rename_reserved_keywords(service_name_) << "\n"
-    << "from .ttypes import *\n\n\n";
+    << "from . import ttypes\n"
+    "\n"
+    "from thrift.util.remote import Function\n"
+    "from thrift.remote import Remote\n";
 
   // Emit a list of objects describing the service functions.
-  // The rest of the code will use this to print the usage message and
+  // The library code will use this to print the usage message and
   // perform function argument processing
   f_remote <<
-    "class Function(object):\n"
-    "    def __init__(self, name, return_type, args):\n"
-    "        self.name = name\n"
-    "        self.return_type = return_type\n"
-    "        self.args = args\n"
-    "\n"
-    "\n"
     "FUNCTIONS = {\n";
 
   set<string> processed_fns;
@@ -2338,157 +2500,13 @@ void t_py_generator::generate_service_remote(t_service* tservice) {
   }
   f_remote <<
     "}\n"
-    "\n";
-
-  f_remote <<
-    "def print_functions(out=sys.stdout):\n"
-    "    out.write('Functions:\\n')\n"
-    "    for fn_name in sorted(FUNCTIONS):\n"
-    "        fn = FUNCTIONS[fn_name]\n"
-    "        if fn.return_type is None:\n"
-    "            out.write('  oneway void ')\n"
-    "        else:\n"
-    "            out.write('  %s ' % (fn.return_type,))\n"
-    "        out.write(fn_name + '(')\n"
-    "        out.write(', '.join('%s %s' % (type, name)\n"
-    "                            for type, name, true_type in fn.args))\n"
-    "        out.write(')\\n')\n"
-    "\n"
-    "\n"
-    "def parse_host_port(value, default_port):\n"
-    "    parts = value.rsplit(':', 1)\n"
-    "    if len(parts) == 1:\n"
-    "        return (parts[0], default_port)\n"
-    "    try:\n"
-    "        port = int(parts[1])\n"
-    "    except ValueError:\n"
-    "        raise ValueError('invalid port: ' + parts[1])\n"
-    "    return (parts[0], port)\n"
-    "\n"
-    "\n";
-
-  // We emit optparse code for now.
-  // In the future it would be nice to emit argparse code for python 2.7 and
-  // above.
-  f_remote <<
-    "def main(argv):\n"
-    "    usage = '%prog [OPTIONS] FUNCTION [ARGS ...]'\n"
-    "    op = optparse.OptionParser(usage=usage, add_help_option=False)\n"
-    "    op.disable_interspersed_args()\n"
-    "    op.add_option('-h', '--host',\n"
-    "                  action='store', metavar='HOST[:PORT]',\n"
-    "                  help='The host and port to connect to')\n"
-    "    op.add_option('-u', '--url',\n"
-    "                  action='store',\n"
-    "                  help='The URL to connect to, for HTTP transport')\n"
-    "    op.add_option('-f', '--framed',\n"
-    "                  action='store_true', default=False,\n"
-    "                  help='Use framed transport')\n"
-    "    op.add_option('-s', '--ssl',\n"
-    "                  action='store_true', default=False,\n"
-    "                  help='Use SSL socket')\n"
-    "    op.add_option('-U', '--unframed',\n"
-    "                  action='store_true', default=False,\n"
-    "                  help='Use unframed transport')\n"
-    "    op.add_option('-j', '--json',\n"
-    "                  action='store_true', default=False,\n"
-    "                  help='Use TJSONProtocol')\n"
-    "    op.add_option('-c', '--compact',\n"
-    "                  action='store_true', default=False,\n"
-    "                  help='Use TCompactProtocol')\n"
-    "    op.add_option('-?', '--help',\n"
-    "                  action='help',\n"
-    "                  help='Show this help message and exit')\n"
-    "\n"
-    "    (options, args) = op.parse_args(argv[1:])\n"
-    "\n"
-    "    if not args:\n"
-    "        op.print_help(sys.stderr)\n"
-    "        print_functions(sys.stderr)\n"
-    "        return os.EX_USAGE\n"
-    "\n"
-    "    # Before we try to connect, make sure\n"
-    "    # the function and arguments are valid\n"
-    "    fn_name = args[0]\n"
-    "    try:\n"
-    "        fn = FUNCTIONS[fn_name]\n"
-    "    except KeyError:\n"
-    "        print_functions(sys.stderr)\n"
-    "        print('\\nerror: unknown function \"%s\"' % fn_name, \n"
-    "                 file=sys.stderr)\n"
-    "        return os.EX_USAGE\n"
-    "\n"
-    "    if len(args) != len(fn.args) + 1:\n"
-    "        print('error: %s requires exactly %d arguments'% \n"
-    "                 (fn_name, len(fn.args)), file=sys.stderr)\n"
-    "        return os.EX_USAGE\n"
-    "    fn_args = []\n"
-    "    for arg, arg_info in zip(args[1:], fn.args):\n"
-    "        if arg_info[2] == 'string':\n"
-    "            # For ease-of-use, we don't eval string arguments, simply so\n"
-    "            # users don't have to wrap the arguments in quotes\n"
-    "            fn_args.append(arg)\n"
-    "            continue\n"
-    "\n"
-    "        try:\n"
-    "            value = eval(arg)\n"
-    "        except:\n"
-    "            traceback.print_exc(file=sys.stderr)\n"
-    "            print('\\nerror parsing argument \"%s\"' % (arg,), \n"
-    "                     file=sys.stderr)\n"
-    "            return os.EX_DATAERR\n"
-    "        fn_args.append(value)\n"
-    "\n"
-    "    # Create the transport\n"
-    "    if options.framed and options.unframed:\n"
-    "        op.error('cannot specify both --framed and --unframed')\n"
-    "    if options.url is not None:\n"
-    "        if options.host is not None:\n"
-    "            op.error('cannot specify both --url and --host')\n"
-    "        if not any([options.unframed, options.json]):\n"
-    "            op.error('can only specify --url with --unframed or --json')\n"
-    "        url = urlparse(options.url)\n"
-    "        parse_host_port(url[1], 80)\n"
-    "        transport = THttpClient.THttpClient(options.url)\n"
-    "    elif options.host is not None:\n"
-    "        host, port = parse_host_port(options.host, "
-           << default_port_ << ")\n"
-    "        socket = TSSLSocket.TSSLSocket(host, port) if options.ssl \\\n"
-    "                else TSocket.TSocket(host, port)\n"
-    "        if options.framed:\n"
-    "            transport = TTransport.TFramedTransport(socket)\n"
-    "        else:\n"
-    "            transport = TTransport.TBufferedTransport(socket)\n"
-    "    else:\n"
-    "        print('error: no --host or --url specified', file=sys.stderr)\n"
-    "        return os.EX_USAGE\n"
-    "\n"
-    "    # Create the protocol and client\n"
-    "    if options.json:\n"
-    "        protocol = TJSONProtocol.TJSONProtocol(transport)\n"
-    "    elif options.compact:\n"
-    "        protocol = TCompactProtocol.TCompactProtocol(transport)\n"
-    "    # No explicit option about protocol is specified. Try to infer.\n"
-    "    elif options.framed or options.unframed:\n"
-    "        protocol = TBinaryProtocol.TBinaryProtocolAccelerated(transport)\n"
-    "    else:\n"
-    "        protocol = THeaderProtocol.THeaderProtocol(socket)\n"
-    "        transport = protocol.trans\n"
-    "    transport.open()\n"
-    "    client = " << rename_reserved_keywords(service_name_) <<
-    ".Client(protocol)\n"
-    "\n"
-    "    # Call the function\n"
-    "    method = getattr(client, fn_name)\n"
-    "    ret = method(*fn_args)\n"
-    "\n"
-    "    # Print the result\n"
-    "    pprint.pprint(ret, indent=2)\n"
-    "\n"
     "\n"
     "if __name__ == '__main__':\n"
-    "    rc = main(sys.argv)\n"
-    "    sys.exit(rc)\n";
+    "    Remote.run(FUNCTIONS, "
+           << rename_reserved_keywords(service_name_)
+           << ", ttypes, sys.argv, default_port="
+           << default_port_
+           << ")\n";
 
   // Close the remote file
   f_remote.close();
@@ -2506,6 +2524,55 @@ void t_py_generator::generate_service_remote(t_service* tservice) {
 #endif
   );
 }
+
+/**
+ * Generates a commandline tool for fuzz testing
+ *
+ * @param tservice The service to generate a fuzzer for.
+ */
+void t_py_generator::generate_service_fuzzer(t_service* tservice) {
+  string f_fuzzer_name = package_dir_+"/"+service_name_+"-fuzzer";
+  ofstream f_fuzzer;
+  f_fuzzer.open(f_fuzzer_name.c_str());
+  record_genfile(f_fuzzer_name);
+
+  f_fuzzer <<
+    "#!/usr/bin/env python\n" <<
+    py_autogen_comment() << "\n"
+    "from __future__ import absolute_import\n"
+    "from __future__ import division\n"
+    "from __future__ import print_function\n"
+    "from __future__ import unicode_literals\n"
+    "\n"
+    "import os\n"
+    "import sys\n"
+    "\n" <<
+    py_par_warning("fuzzer") <<
+    "\n" <<
+    "from . import " <<
+    rename_reserved_keywords(service_name_) << "\n" <<
+    "from . import ttypes\n" <<
+    "from . import constants\n" <<
+    "\n"
+    "import thrift.util.fuzzer"
+    "\n"
+    "thrift.util.fuzzer.fuzz_service(" <<
+    rename_reserved_keywords(service_name_) <<
+    ", ttypes, constants)";
+  f_fuzzer.close();
+  chmod(f_fuzzer_name.c_str(),
+        S_IRUSR
+        | S_IWUSR
+        | S_IXUSR
+#ifndef MINGW
+        | S_IRGRP
+        | S_IXGRP
+        | S_IROTH
+        | S_IXOTH
+#endif
+  );
+}
+
 
 /**
  * Generates a service server definition.
@@ -3486,7 +3553,7 @@ string t_py_generator::type_to_enum(t_type* type) {
 string t_py_generator::type_to_spec_args(t_type* ttype) {
   ttype = get_true_type(ttype);
 
-  if (ttype->is_base_type() || ttype->is_enum()) {
+  if (ttype->is_base_type()) {
     t_base_type::t_base tbase = ((t_base_type*)ttype)->get_base();
     if (tbase == t_base_type::TYPE_STRING) {
       if (((t_base_type*)ttype)->is_binary()) {
@@ -3495,6 +3562,8 @@ string t_py_generator::type_to_spec_args(t_type* ttype) {
       return "True";
     }
     return "None";
+  } else if (ttype->is_enum()) {
+    return type_name(ttype);
   } else if (ttype->is_struct()){
     return "[" + type_name(ttype) + ", " + type_name(ttype) + ".thrift_spec, " +
       (((t_struct*)ttype)->is_union() ? "True]" : "False]");

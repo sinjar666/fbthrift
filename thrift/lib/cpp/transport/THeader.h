@@ -18,18 +18,13 @@
 #define THRIFT_TRANSPORT_THEADER_H_ 1
 
 #include <functional>
+#include <map>
+#include <vector>
 
-#include <thrift/lib/cpp/protocol/TBinaryProtocol.h>
-#include <thrift/lib/cpp/protocol/TCompactProtocol.h>
 #include <thrift/lib/cpp/protocol/TProtocolTypes.h>
 #include <thrift/lib/cpp/concurrency/Thread.h>
-#include <thrift/lib/cpp/util/THttpParser.h>
-
-#include <folly/io/IOBuf.h>
-#include <folly/io/IOBufQueue.h>
 
 #include <bitset>
-#include "boost/scoped_array.hpp"  // nolint
 #include <pwd.h>
 #include <unistd.h>
 #include <chrono>
@@ -57,11 +52,14 @@ enum HEADER_FLAGS {
   HEADER_FLAG_DUPLEX_REVERSE = 0x08,
 };
 
-enum THRIFT_SECURITY_POLICY {
-  THRIFT_SECURITY_DISABLED = 1,
-  THRIFT_SECURITY_PERMITTED = 2,
-  THRIFT_SECURITY_REQUIRED = 3,
-};
+namespace folly {
+class IOBuf;
+class IOBufQueue;
+}
+
+namespace apache { namespace thrift { namespace util {
+class THttpClientParser;
+}}}
 
 namespace apache { namespace thrift { namespace transport {
 
@@ -82,52 +80,15 @@ using apache::thrift::protocol::T_COMPACT_PROTOCOL;
 class THeader {
  public:
 
-  virtual ~THeader() {}
+  virtual ~THeader();
 
-  explicit THeader()
-    : queue_(new folly::IOBufQueue)
-    , protoId_(T_COMPACT_PROTOCOL)
-    , protoVersion(-1)
-    , clientType(THRIFT_UNKNOWN_CLIENT_TYPE)
-    , prevClientType(THRIFT_HEADER_CLIENT_TYPE)
-    , seqId(0)
-    , flags_(0)
-    , identity(s_identity)
-    , minCompressBytes_(0)
-  {
-    setSupportedClients(nullptr);
-  }
+  THeader();
 
-  explicit THeader(std::bitset<CLIENT_TYPES_LEN> const* clientTypes)
-    : queue_(new folly::IOBufQueue)
-    , protoId_(T_COMPACT_PROTOCOL)
-    , protoVersion(-1)
-    , clientType(THRIFT_UNKNOWN_CLIENT_TYPE)
-    , prevClientType(THRIFT_HEADER_CLIENT_TYPE)
-    , seqId(0)
-    , flags_(0)
-    , identity(s_identity)
-    , minCompressBytes_(0)
-  {
-    setSupportedClients(clientTypes);
-  }
-
-  // If clients is nullptr, a security policy of THRIFT_SECURITY_DISABLED
-  // will be used.
-  void setSupportedClients(std::bitset<CLIENT_TYPES_LEN> const* clients);
-  void setSecurityPolicy(THRIFT_SECURITY_POLICY policy);
-  THRIFT_SECURITY_POLICY getSecurityPolicy() {
-    return securityPolicy_;
-  }
-
-  void setClientType(CLIENT_TYPE ct);
-
-  CLIENT_TYPE getClientType() {
-    return clientType;
-  }
-
-  bool isSupportedClient();
-  void checkSupportedClient();
+  void setClientTypeNoCheck(CLIENT_TYPE ct) { clientType = ct; }
+  // Force using specified client type when using legacy client types
+  // i.e. sniffing out client type is disabled.
+  void forceClientType(bool enable) { forceClientType_ = enable; }
+  CLIENT_TYPE getClientType() { return clientType; }
 
   uint16_t getProtocolId() const;
   void setProtocolId(uint16_t protoId) { this->protoId_ = protoId; }
@@ -143,13 +104,18 @@ class THeader {
     flags_ = flags;
   }
 
+  // Info headers
+  typedef std::map<std::string, std::string> StringToStringMap;
+
   /**
    * We know we got a packet in header format here, try to parse the header
    *
    * @param IObuf of the header + data.  Untransforms the data as appropriate.
    * @return Just the data section in an IOBuf
    */
-  std::unique_ptr<folly::IOBuf> readHeaderFormat(std::unique_ptr<folly::IOBuf>);
+  std::unique_ptr<folly::IOBuf> readHeaderFormat(
+    std::unique_ptr<folly::IOBuf>,
+    StringToStringMap& persistentReadHeaders);
 
   /**
    * Untransform the data based on the received header flags
@@ -200,28 +166,15 @@ class THeader {
   const std::vector<uint16_t>& getWriteTransforms() const {
     return writeTrans_; }
 
-  // Info headers
-  typedef std::map<std::string, std::string> StringToStringMap;
-
   // these work with write headers
   void setHeader(const std::string& key, const std::string& value);
   void setHeaders(StringToStringMap&&);
-  void setPersistentHeader(const std::string& key, const std::string& value);
-  void setPersistentHeaders(StringToStringMap&&);
   void clearHeaders();
-  /**
-   * this function only clears the local persistent
-   * header. does not affect the persistent header
-   * that already set
-   */
-  void clearPersistentHeaders();
+
+  void setReadHeaders(StringToStringMap&&);
 
   StringToStringMap& getWriteHeaders() {
     return writeHeaders_;
-  }
-
-  StringToStringMap& getPersistentWriteHeaders() {
-    return persisWriteHeaders_;
   }
 
   // these work with read headers
@@ -229,19 +182,9 @@ class THeader {
     return readHeaders_;
   }
 
-  StringToStringMap& getPersistentHeaders() {
-    return persisReadHeaders_;
-  }
-
   StringToStringMap releaseHeaders() {
     StringToStringMap headers;
     readHeaders_.swap(headers);
-    return headers;
-  }
-
-  StringToStringMap releasePersistentHeaders() {
-    StringToStringMap headers;
-    persisReadHeaders_.swap(headers);
     return headers;
   }
 
@@ -299,8 +242,10 @@ class THeader {
    *
    * @return IOBuf chain with header _and_ data.  Data is not copied
    */
-  std::unique_ptr<folly::IOBuf> addHeader(std::unique_ptr<folly::IOBuf>,
-                                         bool transform=true);
+  std::unique_ptr<folly::IOBuf> addHeader(
+    std::unique_ptr<folly::IOBuf>,
+    StringToStringMap& persistentWriteHeaders,
+    bool transform=true);
   /**
    * Given an IOBuf Chain, remove the header.  Supports unframed (sync
    * only), framed, header, and http (sync case only).  This doesn't
@@ -318,8 +263,10 @@ class THeader {
    *                 If nullptr, we didn't get enough data for a whole message,
    *                 call removeHeader again after reading needed more bytes.
    */
-  std::unique_ptr<folly::IOBuf> removeHeader(folly::IOBufQueue*,
-                                             size_t& needed);
+  std::unique_ptr<folly::IOBuf> removeHeader(
+    folly::IOBufQueue*,
+    size_t& needed,
+    StringToStringMap& persistentReadHeaders);
 
 
   void setMinCompressBytes(uint32_t bytes) {
@@ -330,20 +277,12 @@ class THeader {
     return minCompressBytes_;
   }
 
-  apache::thrift::concurrency::PRIORITY
-  getCallPriority();
-
-  void setCallPriority(
-      apache::thrift::concurrency::PRIORITY prio);
+  apache::thrift::concurrency::PRIORITY getCallPriority();
 
   std::chrono::milliseconds getClientTimeout() const;
 
-  void setClientTimeout(std::chrono::milliseconds timeout);
-
-  /**
-   * Sets the THeader up in HTTP CLIENT mode. host can be an empty string
-   */
-  void useAsHttpClient(const std::string& host, const std::string& uri);
+  void setHttpClientParser(
+      std::shared_ptr<apache::thrift::util::THttpClientParser>);
 
   // 0 and 16th bits must be 0 to differentiate from framed & unframed
   static const uint32_t HEADER_MAGIC = 0x0FFF0000;
@@ -355,26 +294,32 @@ class THeader {
   static const uint32_t HTTP_HEAD_CLIENT_MAGIC = 0x48454144; // HEAD
 
   static const uint32_t MAX_FRAME_SIZE = 0x3FFFFFFF;
+  static const std::string PRIORITY_HEADER;
+  static const std::string CLIENT_TIMEOUT_HEADER;
 
  protected:
+  std::unique_ptr<folly::IOBuf> removeUnframed(folly::IOBufQueue* queue,
+                                               size_t& needed);
+  std::unique_ptr<folly::IOBuf> removeHttpServer(folly::IOBufQueue* queue);
+  std::unique_ptr<folly::IOBuf> removeHttpClient(folly::IOBufQueue* queue,
+                                                 size_t& needed);
+  std::unique_ptr<folly::IOBuf> removeFramed(uint32_t sz,
+                                             folly::IOBufQueue* queue);
 
   void setBestClientType();
-
-  std::bitset<CLIENT_TYPES_LEN> supported_clients;
 
   std::unique_ptr<folly::IOBufQueue> queue_;
 
   // Http client parser
-  std::unique_ptr<apache::thrift::util::THttpClientParser> httpClientParser_;
+  std::shared_ptr<apache::thrift::util::THttpClientParser> httpClientParser_;
 
   int16_t protoId_;
   int8_t protoVersion;
   CLIENT_TYPE clientType;
-  uint16_t prevClientType;
+  bool forceClientType_;
   uint32_t seqId;
   uint16_t flags_;
   std::string identity;
-  THRIFT_SECURITY_POLICY securityPolicy_;
 
   std::vector<uint16_t> readTrans_;
   std::vector<uint16_t> writeTrans_;
@@ -383,15 +328,9 @@ class THeader {
   StringToStringMap readHeaders_;
   StringToStringMap writeHeaders_;
 
-  // Map to use for persistent headers
-  StringToStringMap persisReadHeaders_;
-  StringToStringMap persisWriteHeaders_;
-
   static const std::string IDENTITY_HEADER;
   static const std::string ID_VERSION_HEADER;
   static const std::string ID_VERSION;
-  static const std::string PRIORITY_HEADER;
-  static const std::string CLIENT_TIMEOUT_HEADER;
 
   static std::string s_identity;
 
@@ -403,7 +342,8 @@ class THeader {
   /**
    * Returns the maximum number of bytes that write k/v headers can take
    */
-  size_t getMaxWriteHeadersSize() const;
+  size_t getMaxWriteHeadersSize(
+    const StringToStringMap& persistentWriteHeaders) const;
 
   /**
    * Returns whether the 1st byte of the protocol payload should be hadled

@@ -25,7 +25,7 @@ class ReadOnlyBufferWithRefill(TMemoryBuffer):
         self.refill_called = 0
         if value is None:
             self._readBuffer = StringIO(b"")
-        elif index < 0 or index >= len(value):
+        elif index < 0 or index > len(value):
             raise RuntimeError("index overflow")
         else:
             self._readBuffer = StringIO(value[:index])
@@ -59,13 +59,13 @@ class AbstractTest():
 
         obj.write(proto)
         index = int(split * len(trans.getvalue()))
-        if index == len(trans.getvalue()):
-            index -= 1
         trans = ReadOnlyBufferWithRefill(index, trans.getvalue())
         obj_new = obj.__class__()
         fastproto.decode(obj_new, trans, [obj.__class__, obj.thrift_spec,
             obj.isUnion()], utf8strings=0, protoid=self.PROTO)
         self.assertEqual(obj, obj_new)
+        # Verify the entire buffer is read
+        self.assertEqual(len(trans._readBuffer.read()), 0)
         if split != 1.0:
             self.assertEqual(1, trans.refill_called)
 
@@ -76,7 +76,8 @@ class AbstractTest():
                 anInteger16=234,
                 anInteger32=12345,
                 anInteger64=12345678910,
-                aBinary=b'abcd',
+                aString=u'\x00hello',
+                aBinary=b'\x00\x01\x00',
                 aDouble=1234567.901,
                 aFloat=12345.0,
                 aList=[12, 34, 567, 89],
@@ -91,7 +92,8 @@ class AbstractTest():
                 anInteger16=234,
                 anInteger32=12345,
                 anInteger64=12345678910,
-                aBinary=b'abcd',
+                aString=b'\x00hello',
+                aBinary=b'\x00\x01\x00',
                 aDouble=1234567.901,
                 aFloat=12345.0,
                 aList=[12, 34, 567, 89],
@@ -114,6 +116,9 @@ class AbstractTest():
 
     def test_decode(self):
         self.decode_helper(self.buildOneOfEachB())
+        # Test when ensureMapBegin needs to verify the buffer has
+        # at least a varint and 1 more byte.
+        self.decode_helper(OneOfEach(aMap={b"h": 1}), split=0.1)
 
     def test_decode_union(self):
         u = TestUnion(i32_field=123)
@@ -134,6 +139,10 @@ class AbstractTest():
             aString='hello', aDouble=1.2))
         self.decode_helper(NegativeFieldId(anInteger=344444,
             aString=b'hello again', aDouble=1.34566))
+
+    def test_empty_container(self):
+        self.encode_helper(OneOfEach(aSet=set(), aList=[], aMap={}))
+        self.decode_helper(OneOfEach(aSet=set(), aList=[], aMap={}))
 
 class FastBinaryTest(AbstractTest, unittest.TestCase):
     PROTO = 0

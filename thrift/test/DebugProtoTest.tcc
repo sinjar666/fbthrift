@@ -32,6 +32,8 @@
   ooe.zomg_unicode     = "\xd7\n\a\t";
   ooe.string_string_map["one"] = "two";
   ooe.string_string_hash_map["three"] = "four";
+  ooe.string_set.insert("five");
+  ooe.string_hash_set.insert("six");
   ooe.float_precision = (float)12.345;
   ooe.rank_map[567419810] = (float)0.211184;
   ooe.rank_map[507959914] = (float)0.080382;
@@ -39,9 +41,9 @@
   cout << X_PRINT(ooe) << endl << endl;
 
   cout << "--- const1" << endl;
-  cout << X_PRINT(X_NS g_DebugProtoTest_constants.const1) << endl << endl;
+  cout << X_PRINT(X_NS DebugProtoTest_constants_codemod::const1()) << endl << endl;
   cout << "--- const2" << endl;
-  cout << X_PRINT(X_NS g_DebugProtoTest_constants.const2) << endl << endl;
+  cout << X_PRINT(X_NS DebugProtoTest_constants_codemod::const2()) << endl << endl;
 
   X_NS Nesting n;
   n.my_ooe = ooe;

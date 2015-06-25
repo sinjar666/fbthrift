@@ -68,7 +68,7 @@ class TProcessorEventHandler {
    * The return value is passed to all other callbacks
    * for that function invocation.
    */
-  virtual void* getServiceContext(const std::string& service_name,
+  virtual void* getServiceContext(const char* service_name,
                            const char* fn_name,
                            TConnectionContext* connectionContext) {
     return getContext(fn_name, connectionContext);
@@ -142,8 +142,10 @@ class TProcessorEventHandler {
    *
    * Only called for Cpp2
    */
-  virtual void userException(void* ctx, const char* fn_name,
-                             const std::string& ex) {}
+  virtual void userException(void* ctx,
+                             const char* fn_name,
+                             const std::string& ex,
+                             const std::string& ex_what) {}
 
  protected:
   TProcessorEventHandler() {}
@@ -184,7 +186,7 @@ class ContextStack {
     const std::shared_ptr<
       std::vector<std::shared_ptr<TProcessorEventHandler>>
       >& handlers,
-    const std::string& serviceName,
+    const char* serviceName,
     const char* method,
     TConnectionContext* connectionContext)
       : ctxs_()
@@ -274,10 +276,10 @@ class ContextStack {
     }
   }
 
-  void userException(const std::string& ex) {
+  void userException(const std::string& ex, const std::string& ex_what) {
     if (handlers_) {
       for (size_t i = 0; i < handlers_->size(); i++) {
-        (*handlers_)[i]->userException(ctxs_[i], method_, ex);
+        (*handlers_)[i]->userException(ctxs_[i], method_, ex, ex_what);
       }
     }
   }
@@ -341,7 +343,7 @@ class EventHandlerBase {
 
  protected:
   std::unique_ptr<ContextStack> getContextStack(
-      const std::string& service_name,
+      const char* service_name,
       const char* fn_name,
       TConnectionContext* connectionContext) {
     std::unique_ptr<ContextStack> ctx(
@@ -381,9 +383,10 @@ class TProcessorBase : public EventHandlerBase {
     std::shared_ptr<TProcessorEventHandlerFactory> factory);
 
  private:
-  static std::vector<std::shared_ptr<TProcessorEventHandlerFactory>>*
-    registeredHandlerFactoriesPtr_;
-  static concurrency::ReadWriteMutex* handlerFactoriesMutexPtr_;
+  static concurrency::ReadWriteMutex& getRWMutex();
+
+  static std::vector<std::shared_ptr<TProcessorEventHandlerFactory>>&
+    getFactories();
 };
 
 /**
@@ -427,7 +430,7 @@ class TClientBase : public EventHandlerBase {
     auto s = getContextStack("", fn_name, connectionContext);
     s_ = std::move(s);
   }
-  void generateClientContextStack(const std::string& service_name,
+  void generateClientContextStack(const char* service_name,
                                   const char* fn_name,
                                   TConnectionContext* connectionContext) {
     auto s = getContextStack(service_name, fn_name, connectionContext);
@@ -454,25 +457,12 @@ class TClientBase : public EventHandlerBase {
         std::shared_ptr<protocol::TProtocol> inputProtocol,
         std::shared_ptr<protocol::TProtocol> outputProtocol);
 
-    ConnContext(transport::THeader* header,
-                apache::thrift::async::TEventBaseManager* manager)
-        : header_(header),
-          manager_(manager) {}
-
     void init(const folly::SocketAddress* address,
               std::shared_ptr<protocol::TProtocol> inputProtocol,
               std::shared_ptr<protocol::TProtocol> outputProtocol);
 
-    virtual const folly::SocketAddress* getPeerAddress() const {
+    const folly::SocketAddress* getPeerAddress() const override {
       return &internalAddress_;
-    }
-
-    virtual transport::THeader* getHeader() {
-      if (header_) {
-        return header_;
-      } else {
-        return TConnectionContext::getHeader();
-      }
     }
 
     void reset() {
@@ -481,16 +471,12 @@ class TClientBase : public EventHandlerBase {
       cleanupUserData();
     }
 
-    virtual std::shared_ptr<protocol::TProtocol> getInputProtocol() const {
+    std::shared_ptr<protocol::TProtocol> getInputProtocol() const override {
       return inputProtocol_;
     }
 
-    virtual std::shared_ptr<protocol::TProtocol> getOutputProtocol() const {
+    std::shared_ptr<protocol::TProtocol> getOutputProtocol() const override {
       return outputProtocol_;
-    }
-
-    virtual apache::thrift::async::TEventBaseManager* getEventBaseManager() {
-      return manager_;
     }
 
    private:
@@ -498,14 +484,14 @@ class TClientBase : public EventHandlerBase {
     folly::SocketAddress internalAddress_;
     std::shared_ptr<protocol::TProtocol> inputProtocol_;
     std::shared_ptr<protocol::TProtocol> outputProtocol_;
-    transport::THeader* header_;
-    apache::thrift::async::TEventBaseManager* manager_;
   };
 
  private:
-  static std::vector<std::shared_ptr<TProcessorEventHandlerFactory>>*
-    registeredHandlerFactoriesPtr_;
-  static concurrency::ReadWriteMutex* handlerFactoriesMutexPtr_;
+  static concurrency::ReadWriteMutex& getRWMutex();
+
+  static std::vector<std::shared_ptr<TProcessorEventHandlerFactory>>&
+    getFactories();
+
   std::unique_ptr<ContextStack> s_;
 };
 

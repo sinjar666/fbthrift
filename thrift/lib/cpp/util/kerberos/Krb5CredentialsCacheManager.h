@@ -69,6 +69,10 @@ class Krb5CredentialsCacheManager {
 
   bool fetchIsKillSwitchEnabled();
 
+  /**
+   * Test-only method. Does a busy-wait. If you need something like this in
+   * production, you should consider a better implementation.
+   */
   bool waitUntilCacheStoreInitialized(std::chrono::milliseconds timeoutMS
     = std::chrono::milliseconds(500));
 
@@ -122,6 +126,7 @@ class Krb5CredentialsCacheManager {
   std::shared_ptr<SecurityLogger> logger_;
 
   bool ccacheTypeIsMemory_;
+  bool updateFileCacheEnabled_;
 
   // Rate limit kill switch logging. Since we have only one thread in
   // credentials cache manager, we don't need to protect access to this using

@@ -52,19 +52,19 @@ class t_rb_generator : public t_oop_generator {
    * Init and close methods
    */
 
-  void init_generator();
-  void close_generator();
+  void init_generator() override;
+  void close_generator() override;
 
   /**
    * Program-level generation functions
    */
 
-  void generate_typedef     (t_typedef*  ttypedef);
-  void generate_enum        (t_enum*     tenum);
-  void generate_const       (t_const*    tconst);
-  void generate_struct      (t_struct*   tstruct);
-  void generate_xception    (t_struct*   txception);
-  void generate_service     (t_service*  tservice);
+  void generate_typedef(t_typedef* ttypedef) override;
+  void generate_enum(t_enum* tenum) override;
+  void generate_const(t_const* tconst) override;
+  void generate_struct(t_struct* tstruct) override;
+  void generate_xception(t_struct* txception) override;
+  void generate_service(t_service* tservice) override;
 
   std::string render_const_value(t_type* type, t_const_value* value);
 
@@ -312,7 +312,11 @@ void t_rb_generator::generate_enum(t_enum* tenum) {
     //Populate the hash
     int32_t value = (*c_iter)->get_value();
 
-    first ? first = false : f_types_ << ", ";
+    if (first) {
+      first = false;
+    } else {
+      f_service_ << ", ";
+    }
     f_types_ << value << " => \"" << capitalize((*c_iter)->get_name()) << "\"";
 
   }
@@ -323,7 +327,11 @@ void t_rb_generator::generate_enum(t_enum* tenum) {
   first = true;
   for (c_iter = constants.begin(); c_iter != constants.end(); ++c_iter) {
     // Populate the set
-    first ? first = false: f_types_ << ", ";
+    if (first) {
+      first = false;
+    } else {
+      f_service_ << ", ";
+    }
     f_types_ << capitalize((*c_iter)->get_name());
   }
   f_types_ << "]).freeze" << endl;

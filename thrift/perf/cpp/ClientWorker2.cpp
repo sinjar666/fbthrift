@@ -65,6 +65,21 @@ std::shared_ptr<ClientWorker2::Client> ClientWorker2::createConnection() {
   } else {
     if (config->useSSL()) {
       std::shared_ptr<SSLContext> context = std::make_shared<SSLContext>();
+      if (!config->trustedCAList().empty()) {
+        context->loadTrustedCertificates(config->trustedCAList().c_str());
+        context->setVerificationOption(
+                    SSLContext::SSLVerifyPeerEnum::VERIFY);
+      }
+
+      if (!config->ciphers().empty()) {
+        context->ciphers(config->ciphers());
+      }
+
+      if (!config->key().empty() && !config->cert().empty()) {
+        context->loadCertificate(config->cert().c_str());
+        context->loadPrivateKey(config->key().c_str());
+      }
+
       socket = TAsyncSSLSocket::newSocket(context, ebm_.getEventBase());
       socket->connect(nullptr, *config->getAddress());
       // Loop once to connect
@@ -85,13 +100,13 @@ std::shared_ptr<ClientWorker2::Client> ClientWorker2::createConnection() {
       headerChannel->getHeader()->setTransform(THeader::ZLIB_TRANSFORM);
     }
     if (!config->useHeaderProtocol()) {
-      headerChannel->getHeader()->setClientType(THRIFT_FRAMED_DEPRECATED);
+      headerChannel->setClientType(THRIFT_FRAMED_DEPRECATED);
     }
     headerChannel->setTimeout(kTimeout);
     if (config->SASLPolicy() == "permitted") {
-      headerChannel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
+      headerChannel->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
     } else if (config->SASLPolicy() == "required") {
-      headerChannel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
+      headerChannel->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
     }
 
     if (config->SASLPolicy() == "required" ||

@@ -49,13 +49,8 @@ DEFINE_string(
 DEFINE_bool(
   pin_service_identity,
   false,
-  "Force the service to use keys associated with the service_identity");
-
-// TODO (andreib): Remove this. Using service_identity is preferred.
-DEFINE_string(
-  kerberos_service_name,
-  "",
-  "DEPRECATED: The service part of the principal name for the service");
+  "Force the service to use keys associated with the service_identity. "
+  "Set this only if you're setting service_identity.");
 
 namespace apache { namespace thrift {
 
@@ -87,7 +82,8 @@ class ThriftAcceptorFactory : public folly::AcceptorFactory {
   explicit ThriftAcceptorFactory(ThriftServer* server)
       : server_(server) {}
 
-  virtual std::shared_ptr<folly::Acceptor> newAcceptor(folly::EventBase* eventBase) {
+  std::shared_ptr<folly::Acceptor> newAcceptor(
+      folly::EventBase* eventBase) override {
     return std::make_shared<Cpp2Worker>(server_, nullptr, eventBase);
   }
  private:
@@ -106,6 +102,7 @@ ThriftServer::ThriftServer(const std::string& saslPolicy,
   nonSaslEnabled_(true),
   saslPolicy_(saslPolicy.empty() ? FLAGS_sasl_policy : saslPolicy),
   allowInsecureLoopback_(allowInsecureLoopback),
+  nSaslPoolThreads_(0),
   shutdownSocketSet_(
     folly::make_unique<folly::ShutdownSocketSet>()),
   serveEventBase_(nullptr),
@@ -247,11 +244,14 @@ void ThriftServer::setup() {
 
     if (saslPolicy_ == "required" || saslPolicy_ == "permitted") {
       if (!saslThreadManager_) {
+        auto numThreads = nSaslPoolThreads_ > 0
+                              ? nSaslPoolThreads_
+                              : (nPoolThreads_ > 0 ? nPoolThreads_ : nWorkers_);
         saslThreadManager_ = ThreadManager::newSimpleThreadManager(
-          nPoolThreads_ > 0 ? nPoolThreads_ : nWorkers_, /* count */
-          0, /* pendingTaskCountMax -- no limit */
-          false, /* enableTaskStats */
-          0 /* maxQueueLen -- large default */);
+            numThreads,
+            0, /* pendingTaskCountMax -- no limit */
+            false, /* enableTaskStats */
+            0 /* maxQueueLen -- large default */);
         saslThreadManager_->setNamePrefix("thrift-sasl");
         saslThreadManager_->threadFactory(threadFactory_);
         saslThreadManager_->start();
@@ -260,29 +260,26 @@ void ThriftServer::setup() {
 
       if (getSaslServerFactory()) {
         // If the factory is already set, don't override it with the default
-      } else if (FLAGS_kerberos_service_name.empty() &&
-                 !FLAGS_pin_service_identity) {
-        // If the service name is not specified, not need to pin the principal.
-        // Allow the server to accept anything in the keytab.
-        setSaslServerFactory([=] (TEventBase* evb) {
-          return std::unique_ptr<SaslServer>(
-            new GssSaslServer(evb, saslThreadManager));
-        });
-      } else {
+      } else if (FLAGS_pin_service_identity &&
+                 !FLAGS_service_identity.empty()) {
+        // If pin_service_identity flag is set and service_identity is specified
+        // force the server use the corresponding principal from keytab.
         char hostname[256];
         if (gethostname(hostname, 255)) {
           LOG(FATAL) << "Failed getting hostname";
-        }
-        string service_identity = FLAGS_kerberos_service_name;
-        if (service_identity.empty()) {
-          service_identity = FLAGS_service_identity;
         }
         setSaslServerFactory([=] (TEventBase* evb) {
           auto saslServer = std::unique_ptr<SaslServer>(
             new GssSaslServer(evb, saslThreadManager));
           saslServer->setServiceIdentity(
-            service_identity + "/" + hostname);
+            FLAGS_service_identity + "/" + hostname);
           return std::move(saslServer);
+        });
+      } else {
+        // Allow the server to accept anything in the keytab.
+        setSaslServerFactory([=] (TEventBase* evb) {
+          return std::unique_ptr<SaslServer>(
+            new GssSaslServer(evb, saslThreadManager));
         });
       }
     }
@@ -323,7 +320,10 @@ void ThriftServer::setup() {
 
       ServerBootstrap::childHandler(
         std::make_shared<ThriftAcceptorFactory>(this));
-      ServerBootstrap::group(acceptPool_, ioThreadPool_);
+      {
+        std::lock_guard<std::mutex> lock(ioGroupMutex_);
+        ServerBootstrap::group(acceptPool_, ioThreadPool_);
+      }
       if (socket_) {
         ServerBootstrap::bind(std::move(socket_));
       } else if (port_ != -1) {
@@ -337,7 +337,7 @@ void ThriftServer::setup() {
       // the kernel.)
       ServerBootstrap::getSockets()[0]->getAddress(&address_);
 
-      for (auto& socket : ServerBootstrap::getSockets()) {
+      for (auto& socket : getSockets()) {
         socket->setShutdownSocketSet(shutdownSocketSet_.get());
         socket->setMaxNumMessagesInQueue(maxNumMsgsInQueue_);
         socket->setAcceptRateAdjustSpeed(acceptRateAdjustSpeed_);
@@ -349,15 +349,21 @@ void ThriftServer::setup() {
       }
 
     } else {
-      CHECK(ioThreadPool_->numThreads() == 0);
+      CHECK(configMutable());
       duplexWorker_ = folly::make_unique<Cpp2Worker>(this, serverChannel_);
     }
+
+    // Do not allow setters to be called past this point until the IO worker
+    // threads have been joined in stopWorkers().
+    configMutable_ = false;
+  } catch (std::exception& ex) {
+    // This block allows us to investigate the exception using gdb
+    LOG(ERROR) << "Got an exception while setting up the server: "
+      << ex.what();
+    handleSetupFailure();
+    throw;
   } catch (...) {
-    ServerBootstrap::stop();
-
-    // avoid crash on stop()
-    serveEventBase_ = nullptr;
-
+    handleSetupFailure();
     throw;
   }
 }
@@ -428,7 +434,17 @@ void ThriftServer::stopWorkers() {
     return;
   }
   ServerBootstrap::stop();
+  ServerBootstrap::join();
+  configMutable_ = true;
 }
+
+void ThriftServer::handleSetupFailure(void) {
+  ServerBootstrap::stop();
+
+  // avoid crash on stop()
+  serveEventBase_ = nullptr;
+}
+
 
 void ThriftServer::immediateShutdown(bool abortConnections) {
   shutdownSocketSet_->shutdownAll(abortConnections);
@@ -475,7 +491,7 @@ ThriftServer::CumulativeFailureInjection::test() const {
 
 int32_t ThriftServer::getPendingCount() const {
   int32_t count = 0;
-  if (!getIOGroup()) { // Not enabled in duplex mode
+  if (!getIOGroupSafe()) { // Not enabled in duplex mode
     return 0;
   }
   forEachWorker([&](folly::Acceptor* acceptor) {
@@ -544,9 +560,10 @@ int64_t ThriftServer::getLoad(const std::string& counter, bool check_custom) {
     reqload = (100*(activeRequests_ + getPendingCount()))
       / ((float)maxRequests_);
   }
-  auto workerFactory =
+  auto ioGroup = getIOGroupSafe();
+  auto workerFactory = ioGroup != nullptr ?
     std::dynamic_pointer_cast<folly::wangle::NamedThreadFactory>(
-      getIOGroup()->getThreadFactory());
+      ioGroup->getThreadFactory()) : nullptr;
 
   if (maxConnections_ > 0) {
     int32_t connections = 0;
@@ -560,10 +577,13 @@ int64_t ThriftServer::getLoad(const std::string& counter, bool check_custom) {
 
   auto tm = getThreadManager();
   if (tm) {
-    queueload = tm->getCodel()->getLoad();
+    auto codel = tm->getCodel();
+    if (codel) {
+      queueload = codel->getLoad();
+    }
   }
 
-  if (VLOG_IS_ON(1)) {
+  if (VLOG_IS_ON(1) && workerFactory) {
     FB_LOG_EVERY_MS(INFO, 1000 * 10)
       << workerFactory->getNamePrefix() << " load is: "
       << reqload << "% requests, "

@@ -31,29 +31,31 @@ namespace apache { namespace thrift {
 class StubSaslServer : public SaslServer {
 public:
   explicit StubSaslServer(apache::thrift::async::TEventBase*);
-  virtual void consumeFromClient(
-    Callback *cb, std::unique_ptr<folly::IOBuf>&& message);
+  void consumeFromClient(Callback* cb,
+                         std::unique_ptr<folly::IOBuf>&& message) override;
   virtual std::unique_ptr<folly::IOBuf> wrap(std::unique_ptr<folly::IOBuf>&&);
   virtual std::unique_ptr<folly::IOBuf> unwrap(
       folly::IOBufQueue* q, size_t* remaining);
-  virtual void setServiceIdentity(const std::string& identity) {}
-  virtual std::string getClientIdentity() const;
-  virtual std::string getServerIdentity() const;
-  virtual std::unique_ptr<folly::IOBuf> encrypt(
-    std::unique_ptr<folly::IOBuf>&& buf) {
+  void setServiceIdentity(const std::string& identity) override {}
+  std::string getClientIdentity() const override;
+  std::string getServerIdentity() const override;
+  std::unique_ptr<folly::IOBuf> encrypt(
+      std::unique_ptr<folly::IOBuf>&& buf) override {
     return std::move(buf);
   }
-  virtual std::unique_ptr<folly::IOBuf> decrypt(
-    std::unique_ptr<folly::IOBuf>&& buf) {
+  std::unique_ptr<folly::IOBuf> decrypt(
+      std::unique_ptr<folly::IOBuf>&& buf) override {
     return std::move(buf);
   }
   // This is for testing.
   void setForceFallback() { forceFallback_ = true; }
+  void setForceSendGarbage() { forceSendGarbage_ = true; }
 
 private:
   std::shared_ptr<apache::thrift::concurrency::ThreadManager> threadManager_;
   int phase_;
   bool forceFallback_;
+  bool forceSendGarbage_;
 };
 
 }} // apache::thrift

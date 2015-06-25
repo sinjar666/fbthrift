@@ -26,6 +26,9 @@
 #include <thrift/lib/cpp/util/VarintUtils.h>
 #include <thrift/lib/cpp/concurrency/Thread.h>
 #include "snappy.h"
+#include <thrift/lib/cpp/protocol/TBinaryProtocol.h>
+#include <thrift/lib/cpp/protocol/TCompactProtocol.h>
+#include <thrift/lib/cpp/util/THttpParser.h>
 
 #ifdef HAVE_QUICKLZ
 extern "C" {
@@ -62,71 +65,20 @@ const string THeader::CLIENT_TIMEOUT_HEADER = "client_timeout";
 
 string THeader::s_identity = "";
 
-void THeader::setSupportedClients(std::bitset<CLIENT_TYPES_LEN>
-                                  const* clients) {
-  if (clients) {
-    supported_clients = *clients;
-    // Let's support insecure Header if SASL isn't explicitly supported.
-    // It's ok for both to be supported by the caller, too.
-    if (!supported_clients[THRIFT_HEADER_SASL_CLIENT_TYPE]) {
-      supported_clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-    }
-    setBestClientType();
-  } else {
-    setSecurityPolicy(THRIFT_SECURITY_DISABLED);
-  }
-}
+static const string THRIFT_AUTH_HEADER = "thrift_auth";
 
-void THeader::setSecurityPolicy(THRIFT_SECURITY_POLICY policy) {
-  std::bitset<CLIENT_TYPES_LEN> clients;
+THeader::THeader()
+  : queue_(new folly::IOBufQueue)
+  , protoId_(T_COMPACT_PROTOCOL)
+  , protoVersion(-1)
+  , clientType(THRIFT_HEADER_CLIENT_TYPE)
+  , forceClientType_(false)
+  , seqId(0)
+  , flags_(0)
+  , identity(s_identity)
+  , minCompressBytes_(0) {}
 
-  switch (policy) {
-    case THRIFT_SECURITY_DISABLED: {
-      clients[THRIFT_UNFRAMED_DEPRECATED] = true;
-      clients[THRIFT_FRAMED_DEPRECATED] = true;
-      clients[THRIFT_HTTP_SERVER_TYPE] = true;
-      clients[THRIFT_HTTP_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-      clients[THRIFT_FRAMED_COMPACT] = true;
-      break;
-    }
-    case THRIFT_SECURITY_PERMITTED: {
-      clients[THRIFT_UNFRAMED_DEPRECATED] = true;
-      clients[THRIFT_FRAMED_DEPRECATED] = true;
-      clients[THRIFT_HTTP_SERVER_TYPE] = true;
-      clients[THRIFT_HTTP_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_SASL_CLIENT_TYPE] = true;
-      clients[THRIFT_FRAMED_COMPACT] = true;
-      break;
-    }
-    case THRIFT_SECURITY_REQUIRED: {
-      clients[THRIFT_HEADER_SASL_CLIENT_TYPE] = true;
-      break;
-    }
-  }
-
-  setSupportedClients(&clients);
-  securityPolicy_ = policy;
-}
-
-void THeader::setBestClientType() {
-  if (supported_clients[THRIFT_HEADER_SASL_CLIENT_TYPE]) {
-    setClientType(THRIFT_HEADER_SASL_CLIENT_TYPE);
-  } else {
-    setClientType(THRIFT_HEADER_CLIENT_TYPE);
-  }
-}
-
-void THeader::setClientType(CLIENT_TYPE ct) {
-  if (!supported_clients[ct]) {
-    throw TApplicationException(
-      TApplicationException::UNSUPPORTED_CLIENT_TYPE,
-      "Transport does not support this client type");
-  }
-
-  clientType = ct;
-}
+THeader::~THeader() {}
 
 uint16_t THeader::getProtocolId() const {
   if (clientType == THRIFT_HEADER_CLIENT_TYPE ||
@@ -153,8 +105,87 @@ bool THeader::compactFramed(uint32_t magic) {
 
 }
 
-unique_ptr<IOBuf> THeader::removeHeader(IOBufQueue* queue,
-                                                 size_t& needed) {
+unique_ptr<IOBuf> THeader::removeUnframed(
+    IOBufQueue* queue,
+    size_t& needed) {
+  const_cast<IOBuf*>(queue->front())->coalesce();
+
+  // Test skip using the protocol to detect the end of the message
+  TMemoryBuffer memBuffer(const_cast<uint8_t*>(queue->front()->data()),
+                          queue->front()->length(), TMemoryBuffer::OBSERVE);
+  TBinaryProtocolT<TBufferBase> proto(&memBuffer);
+  uint32_t msgSize = 0;
+  try {
+    std::string name;
+    protocol::TMessageType messageType;
+    int32_t seqid;
+    msgSize += proto.readMessageBegin(name, messageType, seqid);
+    msgSize += protocol::skip(proto, protocol::T_STRUCT);
+    msgSize += proto.readMessageEnd();
+  } catch (const TTransportException& ex) {
+    if (ex.getType() == TTransportException::END_OF_FILE) {
+      // We don't have the full data yet.  We can't tell exactly
+      // how many bytes we need, but it is at least one.
+      needed = 1;
+      return nullptr;
+    }
+  }
+
+  return std::move(queue->split(msgSize));
+}
+
+unique_ptr<IOBuf> THeader::removeHttpServer(IOBufQueue* queue) {
+    // Users must explicitly support this.
+    return queue->move();
+}
+
+unique_ptr<IOBuf> THeader::removeHttpClient(IOBufQueue* queue, size_t& needed) {
+  TMemoryBuffer memBuffer;
+  THttpClientParser parser;
+  parser.setDataBuffer(&memBuffer);
+  const IOBuf* headBuf = queue->front();
+  const IOBuf* nextBuf = headBuf;
+  bool success = false;
+  do {
+    auto remainingDataLen = nextBuf->length();
+    size_t offset = 0;
+    auto ioBufData = nextBuf->data();
+    do {
+      void* parserBuf;
+      size_t parserBufLen;
+      parser.getReadBuffer(&parserBuf, &parserBufLen);
+      size_t toCopyLen = std::min(parserBufLen, remainingDataLen);
+      memcpy(parserBuf, ioBufData + offset, toCopyLen);
+      success |= parser.readDataAvailable(toCopyLen);
+      remainingDataLen -= toCopyLen;
+      offset += toCopyLen;
+    } while (remainingDataLen > 0);
+    nextBuf = nextBuf->next();
+  } while (nextBuf != headBuf);
+  if (!success) {
+    // We don't have full data yet and we don't know how many bytes we need,
+    // but it is at least 1.
+    needed = 1;
+    return nullptr;
+  }
+
+  // Empty the queue
+  queue->move();
+  readHeaders_ = parser.moveReadHeaders();
+
+  return std::move(memBuffer.cloneBufferAsIOBuf());
+}
+
+unique_ptr<IOBuf> THeader::removeFramed(uint32_t sz, IOBufQueue* queue) {
+  // Trim off the frame size.
+  queue->trimStart(4);
+  return queue->split(sz);
+}
+
+unique_ptr<IOBuf> THeader::removeHeader(
+  IOBufQueue* queue,
+  size_t& needed,
+  StringToStringMap& persistentReadHeaders) {
   Cursor c(queue->front());
   size_t chainSize = queue->front()->computeChainDataLength();
   unique_ptr<IOBuf> buf;
@@ -168,80 +199,40 @@ unique_ptr<IOBuf> THeader::removeHeader(IOBufQueue* queue,
   // Use first word to check type.
   uint32_t sz = c.readBE<uint32_t>();
 
+  if (forceClientType_) {
+    switch (clientType) {
+    case THRIFT_FRAMED_DEPRECATED:
+    case THRIFT_FRAMED_COMPACT:
+      // Make sure we have read the whole frame in.
+      if (4 + sz > chainSize) {
+        needed = sz - chainSize + 4;
+        return nullptr;
+      }
+      return removeFramed(sz, queue);
+    case THRIFT_UNFRAMED_DEPRECATED:
+      return removeUnframed(queue, needed);
+    case THRIFT_HTTP_SERVER_TYPE:
+      removeHttpServer(queue);
+    case THRIFT_HTTP_CLIENT_TYPE:
+      return removeHttpClient(queue, needed);
+    default:
+      // Fallback to sniffing out the magic for Header
+      break;
+    };
+  }
+
   if ((sz & TBinaryProtocol::VERSION_MASK) == TBinaryProtocol::VERSION_1) {
     // unframed
     clientType = THRIFT_UNFRAMED_DEPRECATED;
-    const_cast<IOBuf*>(queue->front())->coalesce();
-
-    // Test skip using the protocol to detect the end of the message
-    TMemoryBuffer memBuffer(const_cast<uint8_t*>(queue->front()->data()),
-                            queue->front()->length(), TMemoryBuffer::OBSERVE);
-    TBinaryProtocolT<TBufferBase> proto(&memBuffer);
-    uint32_t msgSize = 0;
-    try {
-      std::string name;
-      protocol::TMessageType messageType;
-      int32_t seqid;
-      msgSize += proto.readMessageBegin(name, messageType, seqid);
-      msgSize += protocol::skip(proto, protocol::T_STRUCT);
-      msgSize += proto.readMessageEnd();
-    } catch (const TTransportException& ex) {
-      if (ex.getType() == TTransportException::END_OF_FILE) {
-        // We don't have the full data yet.  We can't tell exactly
-        // how many bytes we need, but it is at least one.
-        needed = 1;
-        return nullptr;
-      }
-    }
-
-    buf = std::move(queue->split(msgSize));
+    buf = removeUnframed(queue, needed);
   } else if (sz == HTTP_SERVER_MAGIC ||
             sz == HTTP_GET_CLIENT_MAGIC ||
             sz == HTTP_HEAD_CLIENT_MAGIC) {
     clientType = THRIFT_HTTP_SERVER_TYPE;
-
-    // Users must explicitly support this.
-
-    buf = queue->move();
+    buf = removeHttpServer(queue);
   } else if (sz == HTTP_CLIENT_MAGIC) {
     clientType = THRIFT_HTTP_CLIENT_TYPE;
-
-    TMemoryBuffer memBuffer;
-    THttpClientParser parser;
-    parser.setDataBuffer(&memBuffer);
-    const IOBuf* headBuf = queue->front();
-    const IOBuf* nextBuf = headBuf;
-    bool success = false;
-    do {
-      auto remainingDataLen = nextBuf->length();
-      size_t offset = 0;
-      auto ioBufData = nextBuf->data();
-      do {
-        void* parserBuf;
-        size_t parserBufLen;
-        parser.getReadBuffer(&parserBuf, &parserBufLen);
-        size_t toCopyLen = std::min(parserBufLen, remainingDataLen);
-        memcpy(parserBuf, ioBufData + offset, toCopyLen);
-        success |= parser.readDataAvailable(toCopyLen);
-        remainingDataLen -= toCopyLen;
-        offset += toCopyLen;
-      } while (remainingDataLen > 0);
-      nextBuf = nextBuf->next();
-    } while (nextBuf != headBuf);
-    if (!success) {
-      // We don't have full data yet and we don't know how many bytes we need,
-      // but it is at least 1.
-      needed = 1;
-      return nullptr;
-    }
-    buf = std::move(memBuffer.cloneBufferAsIOBuf());
-
-    readHeaders_.clear();
-    const THeader::StringToStringMap& httpHeaders = parser.getReadHeaders();
-    readHeaders_.insert(httpHeaders.begin(), httpHeaders.end());
-
-    // Empty the queue
-    queue->move();
+    buf = removeHttpClient(queue, needed);
   } else {
     if (sz > MAX_FRAME_SIZE) {
       std::string err =
@@ -279,15 +270,10 @@ unique_ptr<IOBuf> THeader::removeHeader(IOBufQueue* queue,
     if ((magic & TBinaryProtocol::VERSION_MASK) == TBinaryProtocol::VERSION_1) {
       // framed
       clientType = THRIFT_FRAMED_DEPRECATED;
-
-      // Trim off the frame size.
-      queue->trimStart(4);
-      buf = queue->split(sz);
+      buf = removeFramed(sz, queue);
     } else if (compactFramed(magic)) {
       clientType = THRIFT_FRAMED_COMPACT;
-      // Trim off the frame size.
-      queue->trimStart(4);
-      buf = queue->split(sz);
+      buf = removeFramed(sz, queue);
     } else if (HEADER_MAGIC == (magic & HEADER_MASK)) {
       if (sz < 10) {
         throw TTransportException(
@@ -300,11 +286,11 @@ unique_ptr<IOBuf> THeader::removeHeader(IOBufQueue* queue,
 
       // Trim off the frame size.
       queue->trimStart(4);
-      buf = readHeaderFormat(queue->split(sz));
+      buf = readHeaderFormat(queue->split(sz), persistentReadHeaders);
 
       // auth client?
       clientType = THRIFT_HEADER_CLIENT_TYPE;
-      auto auth_header = getHeaders().find("thrift_auth");
+      auto auth_header = getHeaders().find(THRIFT_AUTH_HEADER);
       if (auth_header != getHeaders().end()) {
         if (auth_header->second == "1") {
           clientType = THRIFT_HEADER_SASL_CLIENT_TYPE;
@@ -322,17 +308,6 @@ unique_ptr<IOBuf> THeader::removeHeader(IOBufQueue* queue,
   }
 
   return std::move(buf);
-}
-
-bool THeader::isSupportedClient() {
-  return supported_clients[clientType];
-}
-
-void THeader::checkSupportedClient() {
-  if (!isSupportedClient()) {
-    throw TApplicationException(TApplicationException::UNSUPPORTED_CLIENT_TYPE,
-                                "Transport does not support this client type");
-  }
 }
 
 string getString(RWPrivateCursor& c, uint32_t sz) {
@@ -367,7 +342,9 @@ void readInfoHeaders(RWPrivateCursor& c,
   }
 }
 
-unique_ptr<IOBuf> THeader::readHeaderFormat(unique_ptr<IOBuf> buf) {
+unique_ptr<IOBuf> THeader::readHeaderFormat(
+  unique_ptr<IOBuf> buf,
+  StringToStringMap& persistentReadHeaders) {
   readTrans_.clear(); // Clear out any previous transforms.
   readHeaders_.clear(); // Clear out any previous headers.
 
@@ -422,14 +399,16 @@ unique_ptr<IOBuf> THeader::readHeaderFormat(unique_ptr<IOBuf> buf) {
         readInfoHeaders(c, readHeaders_);
         break;
       case infoIdType::PKEYVALUE:
-        readInfoHeaders(c, persisReadHeaders_);
+        readInfoHeaders(c, persistentReadHeaders);
         break;
     }
   }
 
   // if persistent headers are not empty, merge together.
-  if (!persisReadHeaders_.empty())
-    readHeaders_.insert(persisReadHeaders_.begin(), persisReadHeaders_.end());
+  if (!persistentReadHeaders.empty()) {
+    readHeaders_.insert(persistentReadHeaders.begin(),
+                        persistentReadHeaders.end());
+  }
 
   if (verifyCallback_) {
     uint32_t bufLength = buf->computeChainDataLength();
@@ -773,13 +752,8 @@ void THeader::setHeaders(THeader::StringToStringMap&& headers) {
   writeHeaders_ = std::move(headers);
 }
 
-void THeader::setPersistentHeader(const string& key,
-                                  const string& value) {
-  persisWriteHeaders_[key] = value;
-}
-
-void THeader::setPersistentHeaders(THeader::StringToStringMap&& headers) {
-  persisWriteHeaders_ = std::move(headers);
+void THeader::setReadHeaders(THeader::StringToStringMap&& headers) {
+  readHeaders_ = std::move(headers);
 }
 
 size_t getInfoHeaderSize(const THeader::StringToStringMap &headers) {
@@ -796,19 +770,16 @@ size_t getInfoHeaderSize(const THeader::StringToStringMap &headers) {
   return maxWriteHeadersSize;
 }
 
-size_t THeader::getMaxWriteHeadersSize() const {
+size_t THeader::getMaxWriteHeadersSize(
+  const StringToStringMap& persistentWriteHeaders) const {
   size_t maxWriteHeadersSize = 0;
-  maxWriteHeadersSize += getInfoHeaderSize(persisWriteHeaders_);
+  maxWriteHeadersSize += getInfoHeaderSize(persistentWriteHeaders);
   maxWriteHeadersSize += getInfoHeaderSize(writeHeaders_);
   return maxWriteHeadersSize;
 }
 
 void THeader::clearHeaders() {
   writeHeaders_.clear();
-}
-
-void THeader::clearPersistentHeaders() {
-  persisWriteHeaders_.clear();
 }
 
 string THeader::getPeerIdentity() {
@@ -825,6 +796,7 @@ void THeader::setIdentity(const string& identity) {
 }
 
 unique_ptr<IOBuf> THeader::addHeader(unique_ptr<IOBuf> buf,
+                                    StringToStringMap& persistentWriteHeaders,
                                     bool transform) {
   // We may need to modify some transforms before send.  Make
   // a copy here
@@ -872,24 +844,12 @@ unique_ptr<IOBuf> THeader::addHeader(unique_ptr<IOBuf> buf,
 
   if (clientType == THRIFT_HEADER_CLIENT_TYPE ||
       clientType == THRIFT_HEADER_SASL_CLIENT_TYPE) {
-    // We set a persistent header so we don't have to include a header in every
-    // message on the wire. If clientType changes from last used (e.g. SASL
-    // client connects to SASL-disabled server and falls back to non-SASL),
-    // replace the header.
-    if (prevClientType != clientType) {
-      if (clientType == THRIFT_HEADER_SASL_CLIENT_TYPE) {
-        setPersistentHeader("thrift_auth", "1");
-      } else {
-        setPersistentHeader("thrift_auth", "0");
-      }
-      prevClientType = clientType;
-    }
     // header size will need to be updated at the end because of varints.
     // Make it big enough here for max varint size, plus 4 for padding.
     int headerSize = (2 + getNumTransforms(writeTrans) * 2 /* transform data */)
       * 5 + 4;
     // add approximate size of info headers
-    headerSize += getMaxWriteHeadersSize();
+    headerSize += getMaxWriteHeadersSize(persistentWriteHeaders);
 
     // Pkt size
     unique_ptr<IOBuf> header = IOBuf::create(14 + headerSize);
@@ -936,7 +896,7 @@ unique_ptr<IOBuf> THeader::addHeader(unique_ptr<IOBuf> buf,
     // write info headers
 
     // write persistent kv-headers
-    flushInfoHeaders(pkt, persisWriteHeaders_, infoIdType::PKEYVALUE);
+    flushInfoHeaders(pkt, persistentWriteHeaders, infoIdType::PKEYVALUE);
 
     // write non-persistent kv-headers
     flushInfoHeaders(pkt, writeHeaders_, infoIdType::KEYVALUE);
@@ -1005,7 +965,7 @@ unique_ptr<IOBuf> THeader::addHeader(unique_ptr<IOBuf> buf,
   } else if (clientType == THRIFT_HTTP_CLIENT_TYPE) {
     CHECK(httpClientParser_.get() != nullptr);
     buf = std::move(httpClientParser_->constructHeader(std::move(buf),
-                                                       persisWriteHeaders_,
+                                                       persistentWriteHeaders,
                                                        writeHeaders_));
     writeHeaders_.clear();
   } else {
@@ -1034,11 +994,6 @@ THeader::getCallPriority() {
   return apache::thrift::concurrency::N_PRIORITIES;
 }
 
-void THeader::setCallPriority(
-    apache::thrift::concurrency::PRIORITY prio) {
-  setHeader(PRIORITY_HEADER, folly::to<std::string>(prio));
-}
-
 std::chrono::milliseconds THeader::getClientTimeout() const {
   const auto& map = getHeaders();
   auto iter = map.find(CLIENT_TIMEOUT_HEADER);
@@ -1053,13 +1008,9 @@ std::chrono::milliseconds THeader::getClientTimeout() const {
   return std::chrono::milliseconds(0);
 }
 
-void THeader::setClientTimeout(std::chrono::milliseconds timeout) {
-  setHeader(CLIENT_TIMEOUT_HEADER, folly::to<std::string>(timeout.count()));
-}
-
-void THeader::useAsHttpClient(const std::string& host, const std::string& uri) {
-  setClientType(THRIFT_HTTP_CLIENT_TYPE);
-  httpClientParser_.reset(new THttpClientParser(host, uri));
+void THeader::setHttpClientParser(shared_ptr<THttpClientParser> parser) {
+  CHECK(clientType == THRIFT_HTTP_CLIENT_TYPE);
+  httpClientParser_ = parser;
 }
 
 }}} // apache::thrift::transport

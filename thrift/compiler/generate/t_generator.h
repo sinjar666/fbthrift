@@ -136,7 +136,6 @@ class t_generator {
     }
 
     if (ttype->is_container()) {
-      t_container* tcontainer = (t_container*) ttype;
       if (ttype->is_map()) {
         t_map* tmap = (t_map*) ttype;
         return "map<" +
@@ -272,7 +271,7 @@ class t_generator {
     in[0] = tolower(in[0]);
     return in;
   }
-  std::string lowercase(std::string in) {
+  static std::string lowercase(std::string in) {
     for (size_t i = 0; i < in.size(); ++i) {
       in[i] = tolower(in[i]);
     }
@@ -478,10 +477,10 @@ class t_generator_factory_impl : public t_generator_factory {
     : t_generator_factory(short_name, long_name, documentation)
   {}
 
-  virtual t_generator* get_generator(
+  t_generator* get_generator(
       t_program* program,
       const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string) {
+      const std::string& option_string) override {
     return new generator(program, parsed_options, option_string);
   }
 };

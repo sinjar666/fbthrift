@@ -76,7 +76,7 @@ class ThreadManager : public folly::Executor {
   typedef std::function<void(std::shared_ptr<Runnable>)> ExpireCallback;
   typedef std::function<void()> InitCallback;
 
-  virtual ~ThreadManager() {}
+  ~ThreadManager() override {}
 
   /**
    * Starts the thread manager. Verifies all attributes have been properly
@@ -183,7 +183,7 @@ class ThreadManager : public folly::Executor {
   /**
    * Implements folly::Executor::add()
    */
-  virtual void add(folly::Func f) override = 0;
+  void add(folly::Func f) override = 0;
 
   /**
    * Removes a pending task
@@ -296,6 +296,10 @@ public:
                    bool cancellable = false,
                    bool numa = false) = 0;
 
+  virtual uint8_t getNumPriorities() const override {
+    return N_PRIORITIES;
+  }
+
   using ThreadManager::getCodel;
   virtual folly::wangle::Codel* getCodel(PRIORITY priority) = 0;
 
@@ -331,6 +335,57 @@ public:
   class PriorityImplT;
 
   typedef PriorityImplT<folly::LifoSem> PriorityImpl;
+};
+
+// Adapter class that converts a folly::Executor to a ThreadManager interface
+class ThreadManagerExecutorAdapter : public ThreadManager {
+ public:
+  /* implicit */
+  ThreadManagerExecutorAdapter(std::shared_ptr<folly::Executor> exe)
+      : exe_(std::move(exe)) {}
+
+  void join() override {}
+  void start() override {}
+  void stop() override {}
+  STATE state() const override { return STARTED; }
+  std::shared_ptr<ThreadFactory> threadFactory() const override {
+    return nullptr;
+  }
+  void threadFactory(std::shared_ptr<ThreadFactory> value) override {}
+  std::string getNamePrefix() const override { return ""; }
+  void setNamePrefix(const std::string& name) override {}
+  void addWorker(size_t value = 1) override {}
+  void removeWorker(size_t value = 1) override {}
+
+  size_t idleWorkerCount() const override { return 0; }
+  size_t workerCount() const override { return 0; }
+  size_t pendingTaskCount() const override { return 0; }
+  size_t totalTaskCount() const override { return 0; }
+  size_t pendingTaskCountMax() const override { return 0; }
+  size_t expiredTaskCount() override { return 0; }
+
+  void add(std::shared_ptr<Runnable> task,
+           int64_t timeout = 0LL,
+           int64_t expiration = 0LL,
+           bool cancellable = false,
+           bool numa = false) override {
+    exe_->add([=]() {
+      task->run();
+    });
+  }
+  void add(folly::Func f) override { exe_->add(std::move(f)); }
+
+  void remove(std::shared_ptr<Runnable> task) override {}
+  std::shared_ptr<Runnable> removeNextPending() override { return nullptr; }
+
+  void setExpireCallback(ExpireCallback expireCallback) override {}
+  void setCodelCallback(ExpireCallback expireCallback) override {}
+  void setThreadInitCallback(InitCallback initCallback) override {}
+  void enableCodel(bool) override {}
+  folly::wangle::Codel* getCodel() override { return nullptr; }
+
+ private:
+  std::shared_ptr<folly::Executor> exe_;
 };
 
 }}} // apache::thrift::concurrency

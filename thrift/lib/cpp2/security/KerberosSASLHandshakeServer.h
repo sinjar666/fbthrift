@@ -80,6 +80,13 @@ class KerberosSASLHandshakeServer {
     const std::string& getEstablishedServicePrincipal() const;
     const std::string& getEstablishedClientPrincipal() const;
 
+    /**
+     * Set/get the security mechanism
+     */
+    void setSecurityMech(const SecurityMech mech);
+    SecurityMech getSecurityMech();
+
+
     std::unique_ptr<folly::IOBuf> wrapMessage(
       std::unique_ptr<folly::IOBuf>&& buf);
     std::unique_ptr<folly::IOBuf> unwrapMessage(
@@ -113,6 +120,8 @@ class KerberosSASLHandshakeServer {
     gss_OID doid_;
 
     OM_uint32 minimumRequiredSecContextFlags_;
+
+    SecurityMech securityMech_;
 
     void acceptSecurityContext();
 };

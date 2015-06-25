@@ -29,19 +29,25 @@ noinst_LIBRARIES = libsaslstubs.a
 gen-cpp2/Sasl_constants.cpp: gen-cpp2/Sasl_types.h
 gen-cpp2/Sasl_types.cpp: gen-cpp2/Sasl_types.h
 gen-cpp2/SaslAuthService.cpp: gen-cpp2/Sasl_types.h
+gen-cpp2/SaslAuthService_client.cpp: gen-cpp2/Sasl_types.h
 
 thrift2includedir = $(includedir)/thrift/lib/cpp2
 
 thrift2include_HEADERS = \
 	Thrift.h \
+	GeneratedCodeHelper.h \
 	ServiceIncludes.h \
-	CloneableIOBuf.h
+	CloneableIOBuf.h \
+	TestServer.h
 
 thrift2include_asyncdir = $(thrift2includedir)/async
 
 thrift2include_async_HEADERS = \
 	async/AsyncProcessor.h \
 	async/Cpp2Channel.h \
+	async/ProtectionHandler.h \
+	async/FramingHandler.h \
+	async/HeaderChannel.h \
 	async/DuplexChannel.h \
 	async/FutureRequest.h \
 	async/GssSaslClient.h \
@@ -55,7 +61,8 @@ thrift2include_async_HEADERS = \
 	async/SaslEndpoint.h \
 	async/SaslServer.h \
 	async/StubSaslClient.h \
-	async/StubSaslServer.h
+	async/StubSaslServer.h \
+	async/TAsyncTransportHandler.h
 
 thrift2include_serverdir = $(thrift2includedir)/server
 
@@ -79,6 +86,7 @@ thrift2include_protocoldir = $(thrift2includedir)/protocol
 
 thrift2include_protocol_HEADERS = \
 	protocol/Protocol.h \
+	protocol/ProtocolReaderWithRefill.h \
 	protocol/BinaryProtocol.h \
 	protocol/BinaryProtocol.tcc \
 	protocol/CompactProtocol.h \
@@ -91,6 +99,7 @@ thrift2include_protocol_HEADERS = \
 	protocol/VirtualProtocol.h
 
 libthriftcpp2_la_SOURCES = Version.cpp \
+			   async/HeaderChannel.cpp \
 			   async/HeaderClientChannel.cpp \
 			   async/HeaderServerChannel.cpp \
 			   async/StubSaslClient.cpp \
@@ -99,6 +108,8 @@ libthriftcpp2_la_SOURCES = Version.cpp \
 			   async/GssSaslClient.cpp \
 			   async/GssSaslServer.cpp \
 			   async/Cpp2Channel.cpp \
+			   async/ProtectionHandler.cpp \
+			   async/FramingHandler.cpp \
 			   async/AsyncProcessor.cpp \
 			   async/DuplexChannel.cpp \
 			   protocol/Serializer.cpp \
@@ -115,7 +126,6 @@ libthriftcpp2_la_SOURCES = Version.cpp \
 			   server/Cpp2Connection.cpp \
 			   server/Cpp2Worker.cpp \
 			   server/ThriftServer.cpp \
-			   ../cpp/async/TAsyncSignalHandler.cpp \
 			   ../cpp/EventHandlerBase.cpp \
 			   ../cpp/transport/THeaderTransport.cpp \
 			   ../cpp/util/ScopedServerThread.cpp \
@@ -132,7 +142,15 @@ libthriftcpp2_la_SOURCES = Version.cpp \
                            ../cpp/concurrency/NumaThreadManager.cpp
 
 
-libthriftcpp2_la_LIBADD = ../cpp/libthrift.la libsaslstubs.a -lkrb5 -lgssapi_krb5 -lsnappy -lnuma -lboost_thread
+libthriftcpp2_la_LIBADD = \
+	../cpp/libthrift.la \
+	libsaslstubs.a \
+	$(FOLLY_LIBS) \
+	-lkrb5 \
+	-lgssapi_krb5 \
+	-lboost_system \
+	-lboost_thread
+
 libthriftcpp2_la_LDFLAGS = -version-info $(LT_VERSION) $(BOOST_LDFLAGS)
 libthriftcpp2_la_CPPFLAGS = $(AM_CPPFLAGS) $(LIBEVENT_CPPFLAGS) -I../cpp -I$(top_builddir)/../../gperftools-2.0.99/src
 
@@ -140,10 +158,11 @@ THRIFT = $(top_builddir)/compiler/thrift1
 
 BUILT_SOURCES = gen-cpp2/Sasl_constants.cpp \
 		gen-cpp2/Sasl_types.cpp \
-		gen-cpp2/SaslAuthService.cpp
+		gen-cpp2/SaslAuthService.cpp \
+		gen-cpp2/SaslAuthService_client.cpp
 
 gen-cpp2/Sasl_types.h: Sasl.thrift
-	PYTHONPATH=$(PY_LOCAL_PATH) python -mthrift_compiler.main --gen cpp2 $<
+	PYTHONPATH=$(PY_LOCAL_PATH) $(PYTHON) -mthrift_compiler.main --gen cpp2 $<
 
 gen-cpp2/Sasl_constants.cpp: gen-cpp2/Sasl_types.h
 
@@ -153,7 +172,8 @@ gen-cpp2/SaslAuthService.cpp: gen-cpp2/Sasl_types.h
 
 libsaslstubs_a_SOURCES = gen-cpp2/Sasl_constants.cpp \
 			 gen-cpp2/Sasl_types.cpp \
-			 gen-cpp2/SaslAuthService.cpp
+			 gen-cpp2/SaslAuthService.cpp \
+		         gen-cpp2/SaslAuthService_client.cpp
 
 libsaslstubs_a_CPPFLAGS = -fPIC $(AM_CPPFLAGS) $(LIBEVENT_CPPFLAGS) -I../cpp -I$(top_builddir)/../../gperftools-2.0.99/src
 

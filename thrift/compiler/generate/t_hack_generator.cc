@@ -62,19 +62,19 @@ class t_hack_generator : public t_oop_generator {
    * Init and close methods
    */
 
-  void init_generator();
-  void close_generator();
+  void init_generator() override;
+  void close_generator() override;
 
   /**
    * Program-level generation functions
    */
 
-  void generate_typedef  (t_typedef*  ttypedef);
-  void generate_enum     (t_enum*     tenum);
-  void generate_const    (t_const*    tconst);
-  void generate_struct   (t_struct*   tstruct);
-  void generate_xception (t_struct*   txception);
-  void generate_service  (t_service*  tservice);
+  void generate_typedef(t_typedef* ttypedef) override;
+  void generate_enum(t_enum* tenum) override;
+  void generate_const(t_const* tconst) override;
+  void generate_struct(t_struct* tstruct) override;
+  void generate_xception(t_struct* txception) override;
+  void generate_service(t_service* tservice) override;
 
   std::string render_const_value(t_type* type, t_const_value* value);
   std::string render_default_value(t_type* type);
@@ -702,6 +702,7 @@ void t_hack_generator::generate_enum(t_enum* tenum) {
 
   std::string typehint;
   generate_php_docstring(f_types_, tenum);
+  bool hack_enum = false;
   if (is_bitmask_enum(tenum)) {
     typehint = "int";
     f_types_ <<
@@ -709,7 +710,7 @@ void t_hack_generator::generate_enum(t_enum* tenum) {
         php_namespace(tenum->get_program()) <<
         tenum->get_name() << " extends Flags {" <<
         endl;
-  } else {
+  } else if (oldenum_) {
     typehint = php_namespace(tenum->get_program()) + tenum->get_name() + "Type";
     f_types_ <<
       "newtype " << typehint << " = int;" << endl <<
@@ -717,6 +718,13 @@ void t_hack_generator::generate_enum(t_enum* tenum) {
         php_namespace(tenum->get_program()) <<
         tenum->get_name() << " extends Enum<" <<
         typehint << "> {" << endl;
+  } else {
+    hack_enum = true;
+    typehint = php_namespace(tenum->get_program()) + tenum->get_name();
+    f_types_ <<
+      "enum " <<
+        php_namespace(tenum->get_program()) <<
+        tenum->get_name() << ": int {" << endl;
   }
 
   indent_up();
@@ -725,8 +733,12 @@ void t_hack_generator::generate_enum(t_enum* tenum) {
     int32_t value = (*c_iter)->get_value();
 
     generate_php_docstring(f_types_, *c_iter);
+    if (!hack_enum) {
+      indent(f_types_) <<
+        "const " << typehint << " ";
+    }
     indent(f_types_) <<
-      "const " << typehint << " " << (*c_iter)->get_name() << " = " << value << ";" << endl;
+      (*c_iter)->get_name() << " = " << value << ";" << endl;
   }
 
   if (oldenum_) {
@@ -755,7 +767,12 @@ void t_hack_generator::generate_enum(t_enum* tenum) {
   }
 
   indent_down();
-  f_types_ << "}" << endl << endl;
+  f_types_ << "}" << endl;
+  if (hack_enum) {
+    f_types_ <<
+      "type " << typehint << "Type = " << typehint << ";" << endl;
+  }
+  f_types_ << endl;
 }
 
 /**
@@ -836,8 +853,12 @@ string t_hack_generator::render_const_value(t_type* type, t_const_value* value) 
     out << php_namespace(tenum->get_program()) << tenum->get_name()
       << "::" << val->get_name();
   } else if (type->is_struct() || type->is_xception()) {
-    out << "new " << php_namespace(type->get_program()) << type->get_name() << "(Map {" << endl;
+    out << "new " << php_namespace(type->get_program()) << type->get_name() << "(" << endl;
     indent_up();
+    if (map_construct_) {
+      out << indent() << "Map {" << endl;
+      indent_up();
+    }
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
     const map<t_const_value*, t_const_value*>& val = value->get_map();
@@ -852,14 +873,39 @@ string t_hack_generator::render_const_value(t_type* type, t_const_value* value) 
       if (field_type == nullptr) {
         throw "type error: " + type->get_name() + " has no field " + v_iter->first->get_string();
       }
+    }
+    for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
+      t_const_value* k = nullptr;
+      t_const_value* v = nullptr;
+      for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+        if ((*f_iter)->get_name() == v_iter->first->get_string()) {
+          k = v_iter->first;
+          v = v_iter->second;
+        }
+      }
       out << indent();
-      out << render_const_value(g_type_string, v_iter->first);
-      out << " => ";
-      out << render_const_value(field_type, v_iter->second);
-      out << "," << endl;
+      if (map_construct_) {
+        if (v != nullptr) {
+          out << render_const_value(g_type_string, k);
+          out << " => ";
+          out << render_const_value((*f_iter)->get_type(), v);
+          out << "," << endl;
+        }
+      } else {
+        if (v == nullptr) {
+          out << "null," << endl;
+        } else {
+          out << render_const_value((*f_iter)->get_type(), v);
+          out << "," << endl;
+        }
+      }
+    }
+    if (map_construct_) {
+      indent_down();
+      out << indent() << "}" << endl;
     }
     indent_down();
-    indent(out) << "})";
+    indent(out) << ")";
   } else if (type->is_map()) {
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
@@ -1805,9 +1851,13 @@ void t_hack_generator::generate_service_processor(t_service* tservice,
     indent() << "$methodname = 'process_'.$fname;" << endl <<
     indent() << "if (!method_exists($this, $methodname)) {" << endl;
   f_service_ <<
+    indent() << "  $handler_ctx = $this->eventHandler_->getHandlerContext($methodname);" << endl <<
+    indent() << "  $this->eventHandler_->preRead($handler_ctx, $methodname, array());" << endl <<
     indent() << "  $input->skip(TType::STRUCT);" << endl <<
     indent() << "  $input->readMessageEnd();" << endl <<
+    indent() << "  $this->eventHandler_->postRead($handler_ctx, $methodname, array());" << endl <<
     indent() << "  $x = new TApplicationException('Function '.$fname.' not implemented.', TApplicationException::UNKNOWN_METHOD);" << endl <<
+    indent() << "  $this->eventHandler_->handlerError($handler_ctx, $methodname, $x);" << endl <<
     indent() << "  $output->writeMessageBegin($fname, TMessageType::EXCEPTION, $rseqid);" << endl <<
     indent() << "  $x->write($output);" << endl <<
     indent() << "  $output->writeMessageEnd();" << endl <<
@@ -1942,7 +1992,7 @@ void t_hack_generator::generate_process_function(t_service* tservice,
     indent() << "  $reply_type = TMessageType::EXCEPTION;" << endl <<
     indent() << "  $this->eventHandler_->handlerError($handler_ctx, '"
              << fn_name << "', $ex);" << endl <<
-    indent() << "  $result = new TApplicationException($ex->getMessage());"
+    indent() << "  $result = new TApplicationException($ex->getMessage().\"\\n\".$ex->getTraceAsString());"
              << endl <<
     indent() << "}" << endl;
 
@@ -2186,7 +2236,7 @@ string t_hack_generator::type_to_typehint(t_type* ttype, bool nullable) {
     if (is_bitmask_enum((t_enum*) ttype)) {
       return "int";
     } else {
-      return (nullable ? "?" : "") + php_namespace(ttype->get_program()) + ttype->get_name() + "Type";
+      return (nullable ? "?" : "") + php_namespace(ttype->get_program()) + ttype->get_name();
     }
   } else if (ttype->is_struct() || ttype->is_xception()) {
     return (nullable ? "?" : "") + php_namespace(ttype->get_program()) + ttype->get_name();
@@ -2375,7 +2425,10 @@ void t_hack_generator::_generate_service_client(
   generate_php_docstring(out, tservice);
   string extends = "";
   string extends_client = "";
-  if (tservice->get_extends() != nullptr) {
+  bool root = tservice->get_extends() == nullptr;
+  if (root) {
+    out << "<<__ConsistentConstruct>>" << endl;
+  } else {
     extends = php_servicename_mangle(mangle, tservice->get_extends());
     extends_client = " extends " + extends + "Client";
   }
@@ -2399,15 +2452,17 @@ void t_hack_generator::_generate_service_client(
   }
 
   // Factory
-  indent(out) << "public static function factory(): Pair<string, (function (TProtocol, ?TProtocol): " << long_name << "Client)> {" << endl;
-  indent_up();
-  indent(out) << "return Pair {__CLASS__, function(TProtocol $input, ?TProtocol $output) {" << endl;
-  indent_up();
-  indent(out) << "return new self($input, $output);" << endl;
-  indent_down();
-  indent(out) << "}};" << endl;
-  indent_down();
-  indent(out) << "}" << endl << endl;
+  if (root) {
+    indent(out) << "final public static function factory(): (string, (function (TProtocol, ?TProtocol): this)) {" << endl;
+    indent_up();
+    indent(out) << "return tuple(get_called_class(), function(TProtocol $input, ?TProtocol $output) {" << endl;
+    indent_up();
+    indent(out) << "return new static($input, $output);" << endl;
+    indent_down();
+    indent(out) << "});" << endl;
+    indent_down();
+    indent(out) << "}" << endl << endl;
+  }
 
   // Constructor function
   out << indent() << "public function __construct("
@@ -2421,8 +2476,7 @@ void t_hack_generator::_generate_service_client(
       indent() << "$this->input_ = $input;" << endl <<
       indent() << "$this->output_ = $output ?: $input;" << endl <<
       indent() << "$this->asyncHandler_ = new TClientAsyncHandler();" << endl <<
-      indent() << "$this->eventHandler_ = new TClientEventHandler();" << endl <<
-      indent() << "$this->eventHandler_->setClient($this);" << endl;
+      indent() << "$this->eventHandler_ = new TClientEventHandler();" << endl;
     indent_down();
   }
   out <<

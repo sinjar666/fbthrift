@@ -19,7 +19,7 @@
 #include <thrift/lib/cpp2/security/packet_decryption_tool/krb5_internal.h>
 #include <thrift/lib/cpp2/protocol/MessageSerializer.h>
 #include <thrift/lib/cpp2/gen-cpp2/Sasl_types.h>
-#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.h>
+#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.tcc>
 
 namespace apache { namespace thrift {
 
@@ -235,7 +235,7 @@ void DecryptionManager::PacketHandler::parseSecondMessage(Packet* packet) {
 
   apache::thrift::sasl::SaslReply saslReply;
   apache::thrift::sasl::SaslAuthService_authFirstRequest_presult presult;
-  presult.success = &saslReply;
+  presult.get<0>().value = &saslReply;
 
   std::string methodName;
   try {
@@ -351,7 +351,8 @@ DecryptionManager::PacketHandler::removeThriftHeader(Packet* packet) {
   unique_ptr<IOBuf> msg;
   size_t remaining;
   try {
-    msg = header_->removeHeader(queue.get(), remaining);
+    std::map<std::string, std::string> persistentHeaders;
+    msg = header_->removeHeader(queue.get(), remaining, persistentHeaders);
     if (remaining != 0) {
       // Assume security message can always live in one packet
       onError("Corrupted security message");
@@ -374,7 +375,7 @@ void DecryptionManager::PacketHandler::parseFirstMessage(Packet* packet) {
 
   apache::thrift::sasl::SaslStart saslStart;
   apache::thrift::sasl::SaslAuthService_authFirstRequest_pargs pargs;
-  pargs.saslStart = &saslStart;
+  pargs.get<0>().value = &saslStart;
 
   try {
     std::string methodName;

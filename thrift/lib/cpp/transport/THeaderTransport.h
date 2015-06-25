@@ -27,6 +27,8 @@
 #include <thrift/lib/cpp/transport/THttpServer.h>
 #include <thrift/lib/cpp/transport/TTransport.h>
 #include <thrift/lib/cpp/transport/TVirtualTransport.h>
+#include <thrift/lib/cpp/protocol/TBinaryProtocol.h>
+#include <thrift/lib/cpp/protocol/TCompactProtocol.h>
 
 #include <folly/io/IOBuf.h>
 #include <folly/io/IOBufQueue.h>
@@ -59,62 +61,62 @@ class THeaderTransport
     , httpTransport_(transport)
   {
     initBuffers();
+    setSupportedClients(nullptr);
   }
 
   THeaderTransport(const std::shared_ptr<TTransport> transport,
                    std::bitset<CLIENT_TYPES_LEN> const* clientTypes)
-    : THeader(clientTypes)
+    : THeader()
     , transport_(transport)
     , outTransport_(transport)
     , httpTransport_(transport)
   {
     initBuffers();
+    setSupportedClients(clientTypes);
   }
 
   THeaderTransport(const std::shared_ptr<TTransport> inTransport,
                    const std::shared_ptr<TTransport> outTransport,
                    std::bitset<CLIENT_TYPES_LEN> const* clientTypes)
-    : THeader(clientTypes)
+    : THeader()
     , transport_(inTransport)
     , outTransport_(outTransport)
     , httpTransport_(outTransport)
   {
     initBuffers();
+    setSupportedClients(clientTypes);
   }
 
   THeaderTransport(const std::shared_ptr<TTransport> transport, uint32_t sz,
                    std::bitset<CLIENT_TYPES_LEN> const* clientTypes)
-    : THeader(clientTypes)
+    : THeader()
     , transport_(transport)
     , outTransport_(transport)
     , httpTransport_(transport)
   {
     initBuffers();
+    setSupportedClients(clientTypes);
   }
 
-  void resetProtocol();
+  void resetProtocol() override;
 
-  void open() {
-    transport_->open();
-  }
+  void open() override { transport_->open(); }
 
-  bool isOpen() {
-    return transport_->isOpen();
-  }
+  bool isOpen() override { return transport_->isOpen(); }
 
-  bool peek() {
+  bool peek() override {
     return (this->rBase_ < this->rBound_) || transport_->peek();
   }
 
-  void close() {
+  void close() override {
     flush();
     transport_->close();
   }
 
-  virtual uint32_t readSlow(uint8_t* buf, uint32_t len);
+  uint32_t readSlow(uint8_t* buf, uint32_t len) override;
   virtual uint32_t readAll(uint8_t* buf, uint32_t len);
-  virtual void flush();
-  virtual void onewayFlush();
+  void flush() override;
+  void onewayFlush() override;
 
   std::shared_ptr<TTransport> getUnderlyingTransport() {
     return getUnderlyingInputTransport();
@@ -123,9 +125,26 @@ class THeaderTransport
   std::shared_ptr<TTransport> getUnderlyingInputTransport();
   std::shared_ptr<TTransport> getUnderlyingOutputTransport();
 
-  virtual uint32_t readEnd() {
-    return readBuf_->length() + sizeof(uint32_t);
+  uint32_t readEnd() override { return readBuf_->length() + sizeof(uint32_t); }
+
+  StringToStringMap& getPersistentWriteHeaders() {
+    return persistentWriteHeaders_;
   }
+
+  void clearPersistentHeaders() {
+    persistentWriteHeaders_.clear();
+  }
+
+  void setPersistentHeader(const std::string& key, const std::string& value) {
+    persistentWriteHeaders_[key] = value;
+  }
+
+  bool isSupportedClient(CLIENT_TYPE ct) {
+    return supported_clients[ct];
+  }
+
+  void checkSupportedClient(CLIENT_TYPE ct);
+  void setClientType(CLIENT_TYPE ct);
 
   /*
    * TVirtualTransport provides a default implementation of readAll().
@@ -140,7 +159,7 @@ class THeaderTransport
    * Returns true if a frame was read successfully, or false on EOF.
    * (Raises a TTransportException if EOF occurs after a partial frame.)
    */
-  bool readFrame(uint32_t minFrameSize);
+  bool readFrame(uint32_t minFrameSize) override;
 
   void allocateReadBuffer(uint32_t sz);
   uint32_t getWriteBytes();
@@ -153,6 +172,8 @@ class THeaderTransport
     setWriteBuffer(wBuf_.get(), wBufSize_);
   }
 
+  void setSupportedClients(const std::bitset<CLIENT_TYPES_LEN>* ct);
+
   std::shared_ptr<TTransport> transport_;
   std::shared_ptr<TTransport> outTransport_;
 
@@ -160,6 +181,13 @@ class THeaderTransport
 
   // Buffer to use for readFrame/flush processing
   std::unique_ptr<folly::IOBuf> readBuf_;
+
+  // Map to use for persistent headers
+  StringToStringMap persistentReadHeaders_;
+  StringToStringMap persistentWriteHeaders_;
+
+  std::bitset<CLIENT_TYPES_LEN> supported_clients;
+  CLIENT_TYPE clientType_{THRIFT_HEADER_CLIENT_TYPE};
 };
 
 /**
@@ -170,13 +198,13 @@ class THeaderTransportFactory : public TTransportFactory {
  public:
   THeaderTransportFactory() {}
 
-  virtual ~THeaderTransportFactory() {}
+  ~THeaderTransportFactory() override {}
 
   /**
    * Wraps the transport into a header one.
    */
-  virtual std::shared_ptr<TTransport>
-  getTransport(std::shared_ptr<TTransport> trans) {
+  std::shared_ptr<TTransport> getTransport(
+      std::shared_ptr<TTransport> trans) override {
     return std::shared_ptr<TTransport>(
       new THeaderTransport(trans, &clientTypes_));
   }

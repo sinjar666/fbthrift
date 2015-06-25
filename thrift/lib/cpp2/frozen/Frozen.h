@@ -250,7 +250,10 @@ struct LayoutBase {
 
 template <class T, class = void>
 struct Layout : public LayoutBase {
-  static_assert(sizeof(T) == 0, "Objects of this type cannot be frozen yet.");
+  static_assert(sizeof(T) == 0,
+                "Objects of this type cannot be frozen yet.\n"
+                "Be sure to 'frozen2' cpp option was enabled and "
+                "'#include \"..._layouts.h\"'");
 };
 
 template <typename T, typename SchemaInfo = schema::SchemaInfo>
@@ -681,10 +684,13 @@ class Bundled : public Base {
   explicit Bundled(Base&& base) : Base(std::move(base)) {}
   explicit Bundled(const Base& base) : Base(base) {}
 
-  template <class T>
-  void hold(T&& t) {
-    holds_.emplace_back(
-        new HolderImpl<typename std::decay<T>::type>(std::forward<T>(t)));
+  template <class T, class Decayed = typename std::decay<T>::type>
+  Decayed* hold(T&& t) {
+    std::unique_ptr<HolderImpl<Decayed>> holder(
+        new HolderImpl<Decayed>(std::forward<T>(t)));
+    Decayed* ptr =  &holder->t_;
+    holds_.push_back(std::move(holder));
+    return ptr;
   }
 
  private:

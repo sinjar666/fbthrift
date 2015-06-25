@@ -149,17 +149,17 @@ class LoadCallback :
     oneway_ = true;
   }
 
-  void requestSent() {
+  void requestSent() override {
     if (oneway_) {
       r_->genericCob(client_, ClientReceiveState(), &data_);
     }
   }
 
-  void replyReceived(ClientReceiveState&& rstate) {
+  void replyReceived(ClientReceiveState&& rstate) override {
     r_->genericCob(client_, std::move(rstate), &data_);
   }
 
-  void requestError(ClientReceiveState&& rstate) {
+  void requestError(ClientReceiveState&& rstate) override {
     r_->terminator_.decr();
     r_->scoreboard_->opFailed(data_.opType_);
   }
@@ -217,16 +217,16 @@ LoadTestClientPtr AsyncClientWorker2::createConnection() {
     channel->setTimeout(kTimeout);
     // For testing equality, make sure to use binary
     if (!config->useHeaderProtocol()) {
-      channel->getHeader()->setClientType(THRIFT_FRAMED_DEPRECATED);
+      channel->setClientType(THRIFT_FRAMED_DEPRECATED);
     }
     if (config->zlib()) {
       channel->getHeader()->setTransform(THeader::ZLIB_TRANSFORM);
     }
 
     if (config->SASLPolicy() == "permitted") {
-      channel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
+      channel->setSecurityPolicy(THRIFT_SECURITY_PERMITTED);
     } else if (config->SASLPolicy() == "required") {
-      channel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
+      channel->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
     }
 
     if (config->SASLPolicy() == "required" ||

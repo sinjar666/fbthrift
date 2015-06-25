@@ -25,7 +25,7 @@
 #include <thrift/lib/cpp/concurrency/FunctionRunner.h>
 #include <thrift/lib/cpp2/protocol/MessageSerializer.h>
 #include <thrift/lib/cpp2/gen-cpp2/Sasl_types.h>
-#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.h>
+#include <thrift/lib/cpp2/gen-cpp2/SaslAuthService.tcc>
 #include <thrift/lib/cpp2/security/KerberosSASLHandshakeClient.h>
 #include <thrift/lib/cpp2/security/KerberosSASLHandshakeUtils.h>
 #include <thrift/lib/cpp2/security/KerberosSASLThreadManager.h>
@@ -33,6 +33,7 @@
 #include <thrift/lib/cpp/concurrency/Exception.h>
 #include <thrift/lib/cpp/concurrency/PosixThreadFactory.h>
 
+#include <chrono>
 #include <memory>
 
 using folly::IOBuf;
@@ -55,9 +56,14 @@ using apache::thrift::sasl::SaslAuthService_authFirstRequest_presult;
 using apache::thrift::sasl::SaslAuthService_authNextRequest_pargs;
 using apache::thrift::sasl::SaslAuthService_authNextRequest_presult;
 
+DEFINE_int32(sasl_thread_manager_timeout_ms, 1000,
+  "Max number of ms for sasl tasks to wait in the thread manager queue");
+
 namespace apache { namespace thrift {
 
-static const char MECH[] = "krb5";
+static const char KRB5_SASL[] = "krb5";
+static const char KRB5_GSS[] = "gss";
+static const char KRB5_GSS_NO_MUTUAL[] = "gssnm";
 
 GssSaslClient::GssSaslClient(apache::thrift::async::TEventBase* evb,
       const std::shared_ptr<SecurityLogger>& logger)
@@ -70,6 +76,11 @@ GssSaslClient::GssSaslClient(apache::thrift::async::TEventBase* evb,
     , inProgress_(std::make_shared<bool>(false)) {
 }
 
+std::chrono::milliseconds GssSaslClient::getCurTime() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now().time_since_epoch());
+}
+
 void GssSaslClient::start(Callback *cb) {
 
   auto evb = evb_;
@@ -80,9 +91,10 @@ void GssSaslClient::start(Callback *cb) {
   auto seqId = seqId_;
   auto threadManager = saslThreadManager_;
   auto inProgress = inProgress_;
+  auto threadManagerTimeout = FLAGS_sasl_thread_manager_timeout_ms;
+  auto securityMech = securityMech_;
+  logger->logValue("security_mech", (int64_t)*securityMech);
 
-  // Log the overall latency incurred for doing security.
-  logger->logStart("security_latency");
   logger->logStart("prepare_first_request");
 
   folly::exception_wrapper ew_tm;
@@ -96,9 +108,11 @@ void GssSaslClient::start(Callback *cb) {
     ew_tm = folly::try_and_catch<
         TooManyPendingTasksException, TKerberosException>([&]() {
       logger->logStart("thread_manager_overhead");
+      uint64_t before = getCurTime().count();
       *inProgress = true;
       threadManager->start(std::make_shared<FunctionRunner>([=] {
         logger->logEnd("thread_manager_overhead");
+        uint64_t after = getCurTime().count();
 
         MoveWrapper<unique_ptr<IOBuf>> iobuf;
         folly::exception_wrapper ex;
@@ -106,7 +120,9 @@ void GssSaslClient::start(Callback *cb) {
         threadManager->recordActivity();
 
         bool isHealthy = threadManager->isHealthy();
-        if (isHealthy) {
+        bool tmTimeout = (after - before) > threadManagerTimeout;
+
+        if (isHealthy && !tmTimeout) {
           Guard guard(*mutex);
           if (!*evb) {
             return;
@@ -120,29 +136,40 @@ void GssSaslClient::start(Callback *cb) {
             });
         }
 
-        if (isHealthy) {
+        if (!isHealthy) {
+          ex = folly::make_exception_wrapper<TKerberosException>(
+            "Draining SASL thread pool");
+        } else if (tmTimeout) {
+          ex = folly::make_exception_wrapper<TKerberosException>(
+            "Timed out due to thread manager lag");
+        } else {
           ex = folly::try_and_catch<std::exception, TTransportException,
               TProtocolException, TApplicationException,
               TKerberosException>([&]() {
+            clientHandshake->setSecurityMech(*securityMech);
             clientHandshake->startClientHandshake();
             auto token = clientHandshake->getTokenToSend();
 
             SaslStart start;
-            start.mechanism = MECH;
+            start.mechanism = KRB5_SASL;
+            // Prefer GSS mech
+            if (*securityMech == SecurityMech::KRB5_GSS) {
+              start.__isset.mechanisms = true;
+              start.mechanisms.push_back(KRB5_GSS);
+            } else if (*securityMech == SecurityMech::KRB5_GSS_NO_MUTUAL) {
+              start.mechanism = KRB5_GSS_NO_MUTUAL;
+            }
             if (token != nullptr) {
               start.request.response = *token;
               start.request.__isset.response = true;
             }
             start.__isset.request = true;
             SaslAuthService_authFirstRequest_pargs argsp;
-            argsp.saslStart = &start;
+            argsp.get<0>().value = &start;
 
             *iobuf = PargsPresultProtoSerialize(
               proto, argsp, "authFirstRequest", T_CALL, (*seqId)++);
           });
-        } else {
-          ex = folly::make_exception_wrapper<TKerberosException>(
-            "Draining SASL thread pool");
         }
 
         Guard guard(*mutex);
@@ -169,6 +196,15 @@ void GssSaslClient::start(Callback *cb) {
           } else {
             logger->logStart("first_rtt");
             cb->saslSendServer(std::move(*iobuf));
+            // If the context was already established, we're free to send
+            // the actual request.
+            if (clientHandshake_->isContextEstablished()) {
+              cb->saslComplete();
+              if (*inProgress) {
+                threadManager->end();
+                *inProgress = false;
+              }
+            }
           }
         });
       }));
@@ -200,6 +236,8 @@ void GssSaslClient::consumeFromServer(
   auto seqId = seqId_;
   auto threadManager = saslThreadManager_;
   auto inProgress = inProgress_;
+  auto threadManagerTimeout = FLAGS_sasl_thread_manager_timeout_ms;
+  auto securityMech = securityMech_;
 
   folly::exception_wrapper ew_tm;
   if (!threadManager->isHealthy()) {
@@ -208,7 +246,9 @@ void GssSaslClient::consumeFromServer(
   } else {
     ew_tm = folly::try_and_catch<
         TooManyPendingTasksException, TKerberosException>([&]() {
+      uint64_t before = getCurTime().count();
       threadManager->get()->add(std::make_shared<FunctionRunner>([=] {
+        uint64_t after = getCurTime().count();
         std::string req_data;
         MoveWrapper<unique_ptr<IOBuf>> iobuf;
         folly::exception_wrapper ex;
@@ -216,7 +256,8 @@ void GssSaslClient::consumeFromServer(
         threadManager->recordActivity();
 
         bool isHealthy = threadManager->isHealthy();
-        if (isHealthy) {
+        bool tmTimeout = (after - before) > threadManagerTimeout;
+        if (isHealthy && !tmTimeout) {
           Guard guard(*mutex);
           if (!*evb) {
             return;
@@ -239,18 +280,23 @@ void GssSaslClient::consumeFromServer(
                       sizeof(SaslAuthService_authNextRequest_presult),
                       "Types should be structurally identical");
         static_assert(std::is_same<
-            decltype(SaslAuthService_authFirstRequest_presult::success),
-            decltype(
-              SaslAuthService_authNextRequest_presult::success)>::value,
+            SaslAuthService_authFirstRequest_presult,
+            SaslAuthService_authNextRequest_presult>::value,
           "Types should be structurally identical");
 
-        if (isHealthy) {
+        if (!isHealthy) {
+          ex = folly::make_exception_wrapper<TKerberosException>(
+            "Draining SASL thread pool");
+        } else if (tmTimeout) {
+          ex = folly::make_exception_wrapper<TKerberosException>(
+            "Timed out due to thread manager lag");
+        } else {
           ex = folly::try_and_catch<std::exception, TTransportException,
               TProtocolException, TApplicationException,
               TKerberosException>([&]() {
             SaslReply reply;
             SaslAuthService_authFirstRequest_presult presult;
-            presult.success = &reply;
+            presult.get<0>().value = &reply;
             string methodName;
             try {
               methodName = PargsPresultProtoDeserialize(
@@ -283,6 +329,21 @@ void GssSaslClient::consumeFromServer(
               finished = reply.outcome.success;
             }
 
+            // If the mechanism is gss, then set the clientHandshake class to
+            // only do gss.
+            if (reply.__isset.mechanism && reply.mechanism == KRB5_GSS) {
+              *securityMech = SecurityMech::KRB5_GSS;
+            } else if (reply.__isset.mechanism &&
+                       reply.mechanism == KRB5_GSS_NO_MUTUAL) {
+              throw TKerberosException(
+                "Should never get a reply from a server with NO_MUTUAL mech");
+            } else {
+              *securityMech = SecurityMech::KRB5_SASL;
+            }
+            clientHandshake->setSecurityMech(*securityMech);
+
+            logger->logValue("security_mech", (int64_t)*securityMech);
+
             clientHandshake->handleResponse(input);
             auto token = clientHandshake->getTokenToSend();
             if (clientHandshake->getPhase() == COMPLETE) {
@@ -297,14 +358,11 @@ void GssSaslClient::consumeFromServer(
               req.response = *token;
               req.__isset.response = true;
               SaslAuthService_authNextRequest_pargs argsp;
-              argsp.saslRequest = &req;
+              argsp.get<0>().value = &req;
               *iobuf = PargsPresultProtoSerialize(
                 proto, argsp, "authNextRequest", T_CALL, (*seqId)++);
             }
           });
-        } else {
-          ex = folly::make_exception_wrapper<TKerberosException>(
-            "Draining SASL thread pool");
         }
 
         Guard guard(*mutex);

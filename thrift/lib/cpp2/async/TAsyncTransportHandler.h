@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <folly/wangle/channel/ChannelHandler.h>
+#include <folly/wangle/channel/Handler.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/io/IOBuf.h>
@@ -26,6 +26,7 @@
 
 namespace apache { namespace thrift {
 
+// This Handler may only be used in a single Pipeline
 class TAsyncTransportHandler
   : public folly::wangle::BytesToBytesHandler,
     public async::TAsyncTransport::ReadCallback {
@@ -36,7 +37,7 @@ class TAsyncTransportHandler
 
   TAsyncTransportHandler(TAsyncTransportHandler&&) = default;
 
-  ~TAsyncTransportHandler() {
+  ~TAsyncTransportHandler() override {
     if (transport_) {
       detachReadCallback();
     }
@@ -66,8 +67,7 @@ class TAsyncTransportHandler
   }
 
   void attachPipeline(Context* ctx) override {
-    CHECK(!ctx_);
-    ctx_ = ctx;
+    ctx->getPipeline()->setTransport(transport_);
   }
 
   folly::Future<void> write(
@@ -89,7 +89,7 @@ class TAsyncTransportHandler
     return future;
   };
 
-  folly::Future<void> close(Context* ctx) {
+  folly::Future<void> close(Context* ctx) override {
     if (transport_) {
       detachReadCallback();
       transport_->closeNow();
@@ -104,7 +104,7 @@ class TAsyncTransportHandler
   }
 
   void getReadBuffer(void** bufReturn, size_t* lenReturn) override {
-    const auto readBufferSettings = ctx_->getReadBufferSettings();
+    const auto readBufferSettings = getContext()->getReadBufferSettings();
     const auto ret = bufQueue_.preallocate(
         readBufferSettings.first,
         readBufferSettings.second);
@@ -114,16 +114,16 @@ class TAsyncTransportHandler
 
   void readDataAvailable(size_t len) noexcept override {
     bufQueue_.postallocate(len);
-    ctx_->fireRead(bufQueue_);
+    getContext()->fireRead(bufQueue_);
   }
 
   void readEOF() noexcept override {
-    ctx_->fireReadEOF();
+    getContext()->fireReadEOF();
   }
 
   void readError(const transport::TTransportException& ex)
     noexcept override {
-    ctx_->fireReadException(
+    getContext()->fireReadException(
         folly::make_exception_wrapper<transport::TTransportException>(
             std::move(ex)));
   }
@@ -138,7 +138,7 @@ class TAsyncTransportHandler
     void writeError(size_t bytesWritten,
                     const transport::TTransportException& ex)
       noexcept override {
-      promise_.setException(std::make_exception_ptr(ex));
+      promise_.setException(ex);
       delete this;
     }
 
@@ -147,8 +147,7 @@ class TAsyncTransportHandler
     folly::Promise<void> promise_;
   };
 
-  Context* ctx_{nullptr};
-  folly::IOBufQueue bufQueue_;
+  folly::IOBufQueue bufQueue_{folly::IOBufQueue::cacheChainLength()};
   std::shared_ptr<async::TAsyncTransport> transport_;
 };
 

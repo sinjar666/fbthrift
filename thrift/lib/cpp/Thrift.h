@@ -37,11 +37,12 @@
 #include <iterator>
 #include <list>
 #include <map>
-#include <unordered_map>
 #include <memory>
 #include <set>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <thrift/lib/cpp/TLogging.h>
@@ -294,9 +295,9 @@ class TLibraryException : public TException {
 
   TLibraryException(const char* message, int errnoValue);
 
-  virtual ~TLibraryException() throw() {}
+  ~TLibraryException() throw() override {}
 
-  virtual const char* what() const throw() {
+  const char* what() const throw() override {
     if (message_.empty()) {
       return "Default TLibraryException.";
     } else {

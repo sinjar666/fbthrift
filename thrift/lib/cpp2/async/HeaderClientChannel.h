@@ -20,12 +20,14 @@
 #include <thrift/lib/cpp/async/HHWheelTimer.h>
 #include <thrift/lib/cpp2/async/MessageChannel.h>
 #include <thrift/lib/cpp2/async/RequestChannel.h>
+#include <thrift/lib/cpp2/async/HeaderChannel.h>
 #include <thrift/lib/cpp2/async/SaslClient.h>
 #include <thrift/lib/cpp2/async/Cpp2Channel.h>
 #include <thrift/lib/cpp/async/TDelayedDestruction.h>
 #include <thrift/lib/cpp/async/Request.h>
 #include <thrift/lib/cpp/transport/THeader.h>
 #include <thrift/lib/cpp/async/TEventBase.h>
+#include <thrift/lib/cpp/util/THttpParser.h>
 #include <memory>
 
 #include <unordered_map>
@@ -40,11 +42,12 @@ namespace apache { namespace thrift {
  * messages encoded using THeaderProtocol.
  */
 class HeaderClientChannel : public RequestChannel,
+                            public HeaderChannel,
                             public MessageChannel::RecvCallback,
                             virtual public async::TDelayedDestruction {
-  typedef ProtectionChannelHandler::ProtectionState ProtectionState;
+  typedef ProtectionHandler::ProtectionState ProtectionState;
  protected:
-  virtual ~HeaderClientChannel(){}
+  ~HeaderClientChannel() override {}
 
  public:
   explicit HeaderClientChannel(
@@ -72,7 +75,7 @@ class HeaderClientChannel : public RequestChannel,
   void closeNow();
 
   // TDelayedDestruction methods
-  void destroy();
+  void destroy() override;
 
   apache::thrift::async::TAsyncTransport* getTransport() {
     return cpp2Channel_->getTransport();
@@ -84,24 +87,25 @@ class HeaderClientChannel : public RequestChannel,
 
   // Client interface from RequestChannel
   using RequestChannel::sendRequest;
-  uint32_t sendRequest(const RpcOptions&,
+  uint32_t sendRequest(RpcOptions&,
                        std::unique_ptr<RequestCallback>,
                        std::unique_ptr<apache::thrift::ContextStack>,
-                       std::unique_ptr<folly::IOBuf>);
+                       std::unique_ptr<folly::IOBuf>) override;
 
   using RequestChannel::sendOnewayRequest;
-  uint32_t sendOnewayRequest(const RpcOptions&,
-                         std::unique_ptr<RequestCallback>,
-                         std::unique_ptr<apache::thrift::ContextStack>,
-                         std::unique_ptr<folly::IOBuf>);
+  uint32_t sendOnewayRequest(RpcOptions&,
+                             std::unique_ptr<RequestCallback>,
+                             std::unique_ptr<apache::thrift::ContextStack>,
+                             std::unique_ptr<folly::IOBuf>) override;
 
-  void setCloseCallback(CloseCallback*);
+  void setCloseCallback(CloseCallback*) override;
 
   // Interface from MessageChannel::RecvCallback
-  void messageReceived(std::unique_ptr<folly::IOBuf>&&,
-                       std::unique_ptr<MessageChannel::RecvCallback::sample>);
-  void messageChannelEOF();
-  void messageReceiveErrorWrapped(folly::exception_wrapper&&);
+  void messageReceived(
+      std::unique_ptr<folly::IOBuf>&&,
+      std::unique_ptr<MessageChannel::RecvCallback::sample>) override;
+  void messageChannelEOF() override;
+  void messageReceiveErrorWrapped(folly::exception_wrapper&&) override;
 
   // Client timeouts for read, write.
   // Servers should use timeout methods on underlying transport.
@@ -130,22 +134,25 @@ class HeaderClientChannel : public RequestChannel,
     return keepRegisteredForClose_;
   }
 
-  apache::thrift::async::TEventBase* getEventBase() {
+  apache::thrift::async::TEventBase* getEventBase() override {
       return cpp2Channel_->getEventBase();
   }
+
+  /**
+   * Set the channel up in HTTP CLIENT mode. host can be an empty string
+   */
+  void useAsHttpClient(const std::string& host, const std::string& uri);
 
   // event base methods
   void attachEventBase(apache::thrift::async::TEventBase*);
   void detachEventBase();
   bool isDetachable();
 
-  apache::thrift::transport::THeader* getHeader() {
+  apache::thrift::transport::THeader* getHeader() override {
     return header_.get();
   }
 
-  uint16_t getProtocolId() {
-    return header_->getProtocolId();
-  }
+  uint16_t getProtocolId() override { return header_->getProtocolId(); }
 
   bool expireCallback(uint32_t seqId);
 
@@ -187,7 +194,7 @@ class HeaderClientChannel : public RequestChannel,
     return getProtectionState() == ProtectionState::VALID;
   }
 
-  class ClientFramingHandler : public FramingChannelHandler {
+  class ClientFramingHandler : public FramingHandler {
   public:
     explicit ClientFramingHandler(HeaderClientChannel& channel)
       : channel_(channel) {}
@@ -202,6 +209,8 @@ class HeaderClientChannel : public RequestChannel,
 
 private:
   bool clientSupportHeader();
+
+  std::shared_ptr<apache::thrift::util::THttpClientParser> httpClientParser_;
   /**
    * Callback to manage the lifetime of a two-way call.
    * Deletes itself when it receives both a send and recv callback.
@@ -231,7 +240,10 @@ private:
                    uint32_t sendSeqId,
                    uint16_t protoId,
                    std::unique_ptr<RequestCallback> cb,
-                   std::unique_ptr<apache::thrift::ContextStack> ctx)
+                   std::unique_ptr<apache::thrift::ContextStack> ctx,
+                   apache::thrift::async::HHWheelTimer* timer,
+                   std::chrono::milliseconds timeout,
+                   std::chrono::milliseconds chunkTimeout)
         : channel_(channel)
         , sendSeqId_(sendSeqId)
         , protoId_(protoId)
@@ -239,17 +251,23 @@ private:
         , ctx_(std::move(ctx))
         , sendState_(QState::INIT)
         , recvState_(QState::QUEUED)
-        , cbCalled_(false) { }
-    ~TwowayCallback() {
+        , cbCalled_(false)
+        , chunkTimeoutCallback_(this, timer, chunkTimeout)
+   {
+      if (timeout > std::chrono::milliseconds(0)) {
+        timer->scheduleTimeout(this, timeout);
+      }
+   }
+   ~TwowayCallback() override {
       X_CHECK_STATE_EQ(sendState_, QState::DONE);
       X_CHECK_STATE_EQ(recvState_, QState::DONE);
       CHECK(cbCalled_);
     }
-    void sendQueued() {
+    void sendQueued() override {
       X_CHECK_STATE_EQ(sendState_, QState::INIT);
       sendState_ = QState::QUEUED;
     }
-    void messageSent() {
+    void messageSent() override {
       X_CHECK_STATE_EQ(sendState_, QState::QUEUED);
       CHECK(cb_);
       auto old_ctx =
@@ -259,7 +277,7 @@ private:
       sendState_ = QState::DONE;
       maybeDeleteThis();
     }
-    void messageSendError(folly::exception_wrapper&& ex) {
+    void messageSendError(folly::exception_wrapper&& ex) override {
       X_CHECK_STATE_NE(sendState_, QState::DONE);
       sendState_ = QState::DONE;
       if (recvState_ == QState::QUEUED) {
@@ -293,10 +311,27 @@ private:
       cb_->replyReceived(ClientReceiveState(protoId_,
                                             std::move(buf),
                                             std::move(ctx_),
-                                            channel_->isSecurityActive()));
+                                            channel_->isSecurityActive(),
+                                            true));
 
       apache::thrift::async::RequestContext::setContext(old_ctx);
       maybeDeleteThis();
+    }
+    void partialReplyReceived(std::unique_ptr<folly::IOBuf> buf) {
+      X_CHECK_STATE_NE(sendState_, QState::INIT);
+      X_CHECK_STATE_EQ(recvState_, QState::QUEUED);
+      chunkTimeoutCallback_.resetTimeout();
+
+      CHECK(cb_);
+
+      auto old_ctx =
+        apache::thrift::async::RequestContext::setContext(cb_->context_);
+      cb_->replyReceived(ClientReceiveState(protoId_,
+                                            std::move(buf),
+                                            ctx_,
+                                            channel_->isSecurityActive()));
+
+      apache::thrift::async::RequestContext::setContext(old_ctx);
     }
     void requestError(folly::exception_wrapper ex) {
       X_CHECK_STATE_EQ(recvState_, QState::QUEUED);
@@ -314,7 +349,7 @@ private:
       }
       maybeDeleteThis();
     }
-    void timeoutExpired() noexcept {
+    void timeoutExpired() noexcept override {
       X_CHECK_STATE_EQ(recvState_, QState::QUEUED);
       channel_->eraseCallback(sendSeqId_, this);
       recvState_ = QState::DONE;
@@ -358,10 +393,35 @@ private:
     uint32_t sendSeqId_;
     uint16_t protoId_;
     std::unique_ptr<RequestCallback> cb_;
-    std::unique_ptr<apache::thrift::ContextStack> ctx_;
+    std::shared_ptr<apache::thrift::ContextStack> ctx_;
     QState sendState_;
     QState recvState_;
     bool cbCalled_;
+    class TimerCallback : public apache::thrift::async::HHWheelTimer::Callback {
+     public:
+      TimerCallback(TwowayCallback* cb,
+                    apache::thrift::async::HHWheelTimer* timer,
+                    std::chrono::milliseconds chunkTimeout)
+        : cb_(cb)
+        , timer_(timer)
+        , chunkTimeout_(chunkTimeout)
+      {
+        resetTimeout();
+      }
+      void timeoutExpired() noexcept override {
+        cb_->timeoutExpired();
+      }
+      void resetTimeout() {
+        cancelTimeout();
+        if (chunkTimeout_.count() > 0) {
+          timer_->scheduleTimeout(this, chunkTimeout_);
+        }
+      }
+     private:
+      TwowayCallback* cb_;
+      apache::thrift::async::HHWheelTimer* timer_;
+      std::chrono::milliseconds chunkTimeout_;
+    } chunkTimeoutCallback_;
 #undef X_CHECK_STATE_NE
 #undef X_CHECK_STATE_EQ
   };
@@ -374,8 +434,8 @@ private:
         : cb_(std::move(cb))
         , ctx_(std::move(ctx))
         , isSecurityActive_(isSecurityActive) {}
-    void sendQueued() { }
-    void messageSent() {
+    void sendQueued() override {}
+    void messageSent() override {
       CHECK(cb_);
       auto old_ctx =
         apache::thrift::async::RequestContext::setContext(cb_->context_);
@@ -383,7 +443,7 @@ private:
       apache::thrift::async::RequestContext::setContext(old_ctx);
       delete this;
     }
-    void messageSendError(folly::exception_wrapper&& ex) {
+    void messageSendError(folly::exception_wrapper&& ex) override {
       CHECK(cb_);
       auto old_ctx =
         apache::thrift::async::RequestContext::setContext(cb_->context_);
@@ -413,8 +473,7 @@ private:
   bool isSecurityPending();
   void setSecurityComplete(ProtectionState state);
 
-  void maybeSetPriorityHeader(const RpcOptions& rpcOptions);
-  void maybeSetTimeoutHeader(const RpcOptions& rpcOptions);
+  void addRpcOptionHeaders(RpcOptions& rpcOptions);
 
   uint32_t sendSeqId_;
   uint32_t sendSecurityPendingSeqId_;
@@ -422,7 +481,7 @@ private:
   std::unique_ptr<SaslClient> saslClient_;
 
   typedef uint32_t (HeaderClientChannel::*AfterSecurityMethod)(
-    const RpcOptions&,
+    RpcOptions&,
     std::unique_ptr<RequestCallback>,
     std::unique_ptr<apache::thrift::ContextStack>,
     std::unique_ptr<folly::IOBuf>);
@@ -434,7 +493,6 @@ private:
                         std::map<std::string, std::string>>> afterSecurity_;
   std::unordered_map<uint32_t, TwowayCallback*> recvCallbacks_;
   std::deque<uint32_t> recvCallbackOrder_;
-  std::unique_ptr<apache::thrift::transport::THeader> header_;
   CloseCallback* closeCallback_;
 
   uint32_t timeout_;
@@ -456,10 +514,11 @@ private:
    public:
     explicit SaslClientCallback(HeaderClientChannel& channel)
       : channel_(channel) {}
-    void saslStarted();
-    void saslSendServer(std::unique_ptr<folly::IOBuf>&&);
-    void saslError(folly::exception_wrapper&&);
-    void saslComplete();
+    void saslStarted() override;
+    void saslSendServer(std::unique_ptr<folly::IOBuf>&&) override;
+    void saslError(folly::exception_wrapper&&) override;
+    void saslComplete() override;
+
    private:
     HeaderClientChannel& channel_;
   } saslClientCallback_;

@@ -22,6 +22,7 @@
 #include <thrift/lib/cpp/util/ScopedServerThread.h>
 #include <thrift/lib/cpp2/protocol/BinaryProtocol.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
+#include <thrift/lib/cpp2/async/HeaderClientChannel.h>
 
 #include "thrift/test/gen-cpp2/CustomStruct.h"
 
@@ -57,10 +58,10 @@ Container createContainer() {
 
 class CustomStructHandler : public CustomStructSvIf {
  public:
-  void echoStruct(MyCustomStruct& out, const MyCustomStruct& in) {
+  void echoStruct(MyCustomStruct& out, const MyCustomStruct& in) override {
     out = in;
   }
-  void echoUnion(MyCustomUnion& out, const MyCustomUnion& in) {
+  void echoUnion(MyCustomUnion& out, const MyCustomUnion& in) override {
     out = in;
   }
 };

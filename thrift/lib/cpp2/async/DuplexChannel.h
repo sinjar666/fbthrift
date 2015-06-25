@@ -64,7 +64,7 @@ class DuplexChannel {
       : HeaderClientChannel(cpp2Channel)
       , duplex_(duplex)
     {}
-    virtual void sendMessage(Cpp2Channel::SendCallback* callback,
+    void sendMessage(Cpp2Channel::SendCallback* callback,
                      std::unique_ptr<folly::IOBuf> buf) override {
       duplex_.lastSender_.set(Who::CLIENT);
       HeaderClientChannel::sendMessage(callback, std::move(buf));
@@ -87,8 +87,8 @@ class DuplexChannel {
       : HeaderServerChannel(cpp2Channel)
       , duplex_(duplex)
     {}
-    virtual void sendMessage(Cpp2Channel::SendCallback* callback,
-                       std::unique_ptr<folly::IOBuf> buf) override {
+    void sendMessage(Cpp2Channel::SendCallback* callback,
+                     std::unique_ptr<folly::IOBuf> buf) override {
       duplex_.lastSender_.set(Who::SERVER);
       HeaderServerChannel::sendMessage(callback, std::move(buf));
     }
@@ -107,8 +107,8 @@ class DuplexChannel {
    public:
     DuplexCpp2Channel(DuplexChannel& duplex,
         const std::shared_ptr<async::TAsyncTransport>& transport,
-        std::unique_ptr<FramingChannelHandler> framingHandler,
-        std::unique_ptr<ProtectionChannelHandler> protectionHandler)
+        std::unique_ptr<FramingHandler> framingHandler,
+        std::unique_ptr<ProtectionHandler> protectionHandler)
       : Cpp2Channel(transport, std::move(framingHandler), std::move(protectionHandler))
       , duplex_(duplex)
       , client_(nullptr)
@@ -159,9 +159,9 @@ class DuplexChannel {
   Who mainChannel_;
   Who lastSender_;
 
-  class FramingHandler : public FramingChannelHandler {
+  class DuplexFramingHandler : public FramingHandler {
    public:
-    explicit FramingHandler(DuplexChannel& duplex)
+    explicit DuplexFramingHandler(DuplexChannel& duplex)
         : duplex_(duplex)
     {}
 
@@ -172,15 +172,15 @@ class DuplexChannel {
     addFrame(std::unique_ptr<folly::IOBuf> buf) override;
    private:
     DuplexChannel& duplex_;
-    folly::IOBufQueue queue_;
 
-    FramingChannelHandler& getHandler(DuplexChannel::Who::WhoEnum who);
+    FramingHandler& getHandler(DuplexChannel::Who::WhoEnum who);
   };
 
-  class ProtectionHandler : public ProtectionChannelHandler {
+  class DuplexProtectionHandler : public ProtectionHandler {
    public:
-    explicit ProtectionHandler(DuplexChannel& duplex)
-        : duplex_(duplex)
+    explicit DuplexProtectionHandler(DuplexChannel& duplex)
+        : ProtectionHandler()
+        , duplex_(duplex)
     {}
 
     void protectionStateChanged() override {
@@ -188,29 +188,29 @@ class DuplexChannel {
         return;
       }
 
-      apache::thrift::transport::THeader* src;
-      apache::thrift::transport::THeader* dst;
+      CLIENT_TYPE srcClientType;
+      std::bitset<CLIENT_TYPES_LEN> supportedClients;
 
       switch (duplex_.mainChannel_.get()) {
       case Who::CLIENT:
-        src = duplex_.clientChannel_->getHeader();
-        dst = duplex_.serverChannel_->getHeader();
+        srcClientType = duplex_.clientChannel_->getClientType();
+        supportedClients[srcClientType] = true;
+        duplex_.serverChannel_->setSupportedClients(&supportedClients);
+        duplex_.serverChannel_->setClientType(srcClientType);
         break;
       case Who::SERVER:
-        src = duplex_.serverChannel_->getHeader();
-        dst = duplex_.clientChannel_->getHeader();
+        srcClientType = duplex_.serverChannel_->getClientType();
+        supportedClients[srcClientType] = true;
+        duplex_.clientChannel_->setSupportedClients(&supportedClients);
+        duplex_.clientChannel_->setClientType(srcClientType);
         break;
       case Who::UNKNOWN:
         CHECK(false);
       }
 
-      CLIENT_TYPE type = src->getClientType();
-
-      std::bitset<CLIENT_TYPES_LEN> supportedClients;
-      supportedClients[type] = true;
-
-      dst->setSupportedClients(&supportedClients);
-      dst->setClientType(type);
+      if (getContext() && !inputQueue_.empty()) {
+        read(getContext(), inputQueue_);
+      }
     }
    private:
     DuplexChannel& duplex_;

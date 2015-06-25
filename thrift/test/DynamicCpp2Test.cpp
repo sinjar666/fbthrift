@@ -26,6 +26,7 @@
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/thrift/gen-cpp2/dynamic_types.h>
 #include <thrift/test/gen-cpp2/DynamicTestService.h>
+#include <thrift/lib/cpp2/async/HeaderClientChannel.h>
 
 using namespace cpp2;
 using namespace std;
@@ -99,7 +100,7 @@ static dynamic kDynamics[] = {
 
 class TestServiceHandler : public DynamicTestServiceSvIf {
  public:
-  void echo(SerializableDynamic& out, const SerializableDynamic& in) {
+  void echo(SerializableDynamic& out, const SerializableDynamic& in) override {
     out = in;
   }
 };

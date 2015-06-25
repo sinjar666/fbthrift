@@ -23,6 +23,7 @@
 #include <thrift/lib/cpp2/test/gen-cpp2/DuplexService.h>
 #include <thrift/lib/cpp2/test/gen-cpp2/DuplexClient.h>
 #include <thrift/lib/cpp2/async/DuplexChannel.h>
+#include <thrift/lib/cpp2/TestServer.h>
 
 #include <thrift/lib/cpp/util/ScopedServerThread.h>
 #include <thrift/lib/cpp/async/TEventBase.h>
@@ -55,15 +56,9 @@ public:
   }
 };
 
-std::shared_ptr<ThriftServer> getServer() {
-  auto server = std::make_shared<ThriftServer>();
-  server->setPort(0);
-  server->setInterface(folly::make_unique<TestServiceInterface>());
-  server->setSaslEnabled(true);
-  return server;
-}
-
-void enableSecurity(HeaderClientChannel* channel) {
+void enableSecurity(HeaderClientChannel* channel,
+                    const apache::thrift::SecurityMech mech,
+                    bool failSecurity = false) {
   char hostname[256];
   EXPECT_EQ(gethostname(hostname, 255), 0);
 
@@ -76,8 +71,11 @@ void enableSecurity(HeaderClientChannel* channel) {
 
   std::string clientIdentity = std::string("host/") + hostname;
   std::string serviceIdentity = serviceIdentityPrefix + hostname;
+  if (failSecurity) {
+    serviceIdentity = "bogus";
+  }
 
-  channel->getHeader()->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
+  channel->setSecurityPolicy(THRIFT_SECURITY_REQUIRED);
 
   auto saslClient = folly::make_unique<GssSaslClient>(channel->getEventBase());
   saslClient->setClientIdentity(clientIdentity);
@@ -86,20 +84,21 @@ void enableSecurity(HeaderClientChannel* channel) {
       make_shared<SecurityLogger>()));
   saslClient->setCredentialsCacheManager(
       make_shared<krb5::Krb5CredentialsCacheManager>());
+  saslClient->setSecurityMech(mech);
   channel->setSaslClient(std::move(saslClient));
 }
 
-HeaderClientChannel::Ptr getClientChannel(
-    TEventBase* eb, const folly::SocketAddress& address) {
+HeaderClientChannel::Ptr getClientChannel(TEventBase* eb,
+                                          const folly::SocketAddress& address,
+                                          bool failSecurity = false) {
   auto socket = TAsyncSocket::newSocket(eb, address);
   auto channel = HeaderClientChannel::newChannel(socket);
 
-  enableSecurity(channel.get());
+  enableSecurity(channel.get(), apache::thrift::SecurityMech::KRB5_GSS,
+                 failSecurity);
 
   return std::move(channel);
 }
-
-ScopedServerThread sst(getServer());
 
 class Countdown {
 public:
@@ -117,6 +116,10 @@ private:
 };
 
 void runTest(std::function<void(HeaderClientChannel* channel)> setup) {
+  apache::thrift::TestThriftServerFactory<TestServiceInterface> factory;
+  factory.useStubSaslServer(false);
+  ScopedServerThread sst(factory.create());
+
   TEventBase base;
   auto channel = getClientChannel(&base, *sst.getAddress());
   setup(channel.get());
@@ -210,6 +213,26 @@ TEST(Security, ProtocolCompact) {
   });
 }
 
+TEST(Security, SASL) {
+  runTest([](HeaderClientChannel* channel) {
+    channel->getSaslClient()->setSecurityMech(
+      apache::thrift::SecurityMech::KRB5_SASL);
+  });
+}
+
+TEST(Security, GSS_NO_MUTUAL) {
+  runTest([](HeaderClientChannel* channel) {
+    channel->getSaslClient()->setSecurityMech(
+      apache::thrift::SecurityMech::KRB5_GSS_NO_MUTUAL);
+  });
+}
+
+TEST(Security, GSS) {
+  runTest([](HeaderClientChannel* channel) {
+    channel->getSaslClient()->setSecurityMech(
+      apache::thrift::SecurityMech::KRB5_GSS);
+  });
+}
 
 class DuplexClientInterface : public DuplexClientSvIf {
 public:
@@ -237,7 +260,7 @@ private:
 
 class Updater {
 public:
-  Updater(DuplexClientAsyncClient* client,
+  Updater(shared_ptr<DuplexClientAsyncClient> client,
           TEventBase* eb,
           int32_t startIndex,
           int32_t numUpdates,
@@ -271,7 +294,7 @@ public:
     }
   }
 private:
-  DuplexClientAsyncClient* client_;
+  shared_ptr<DuplexClientAsyncClient> client_;
   TEventBase* eb_;
   int32_t startIndex_;
   int32_t numUpdates_;
@@ -308,26 +331,18 @@ class DuplexServiceInterface : public DuplexServiceSvIf {
   }
 };
 
-std::shared_ptr<ThriftServer> getDuplexServer() {
-  auto server = std::make_shared<ThriftServer>();
-  server->setPort(0);
-  server->setInterface(folly::make_unique<DuplexServiceInterface>());
-  server->setDuplex(true);
-  server->setSaslEnabled(true);
-  return server;
-}
-
-ScopedServerThread duplexsst(getDuplexServer());
-
-TEST(Security, Duplex) {
+void duplexTest(const apache::thrift::SecurityMech mech) {
   enum {START=1, COUNT=3, INTERVAL=1};
+  apache::thrift::TestThriftServerFactory<DuplexServiceInterface> factory;
+  factory.useStubSaslServer(false).duplex(true);
+  ScopedServerThread duplexsst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *duplexsst.getAddress()));
 
   auto duplexChannel =
       std::make_shared<DuplexChannel>(DuplexChannel::Who::CLIENT, socket);
-  enableSecurity(duplexChannel->getClientChannel().get());
+  enableSecurity(duplexChannel->getClientChannel().get(), mech);
   DuplexServiceAsyncClient client(duplexChannel->getClientChannel());
 
   bool success = false;
@@ -353,6 +368,61 @@ TEST(Security, Duplex) {
   base.loopForever();
 
   EXPECT_TRUE(success);
+}
+
+TEST(Security, DuplexSASL) {
+  duplexTest(apache::thrift::SecurityMech::KRB5_SASL);
+}
+
+TEST(Security, DuplexGSS) {
+  duplexTest(apache::thrift::SecurityMech::KRB5_GSS);
+}
+
+TEST(Security, DuplexGSSNoMutual) {
+ duplexTest(apache::thrift::SecurityMech::KRB5_GSS_NO_MUTUAL);
+}
+
+// Test if multiple requests are pending in a queue, for security to establish,
+// then we flow RequestContext correctly with each request.
+void runRequestContextTest(bool failSecurity) {
+  apache::thrift::TestThriftServerFactory<TestServiceInterface> factory;
+  factory.useStubSaslServer(false);
+  ScopedServerThread sst(factory.create());
+  TEventBase base;
+  auto channel = getClientChannel(&base, *sst.getAddress(), failSecurity);
+  TestServiceAsyncClient client(std::move(channel));
+  Countdown c(2, [&base](){base.terminateLoopSoon();});
+
+  // Send first request with a unique RequestContext. This would trigger
+  // security. Rest of the request would queue behind it.
+  folly::RequestContext::create();
+  folly::RequestContext::get()->setContextData("first", nullptr);
+  client.sendResponse([&base,&client,&c](ClientReceiveState&& state) {
+    EXPECT_TRUE(folly::RequestContext::get()->hasContextData("first"));
+    c.down();
+  }, 10);
+
+  // Send another request with a unique RequestContext. This request would
+  // queue behind the first one inside HeaderClientChannel.
+  folly::RequestContext::create();
+  folly::RequestContext::get()->setContextData("second", nullptr);
+  client.sendResponse([&base,&client,&c](ClientReceiveState&& state) {
+    EXPECT_FALSE(folly::RequestContext::get()->hasContextData("first"));
+    EXPECT_TRUE(folly::RequestContext::get()->hasContextData("second"));
+    c.down();
+  }, 10);
+
+  // Now start looping the eventbase to guarantee that all the above requests
+  // would always queue.
+  base.loopForever();
+}
+
+TEST(SecurityRequestContext, Success) {
+  runRequestContextTest(false);
+}
+
+TEST(SecurityRequestContext, Fail) {
+  runRequestContextTest(true);
 }
 
 int main(int argc, char** argv) {

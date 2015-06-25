@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define __STDC_LIMIT_MACROS
 #include <Python.h>
 
 #include <stdint.h>
@@ -23,6 +24,7 @@
 #include <thrift/lib/cpp2/protocol/ProtocolReaderWithRefill.h>
 
 #include <folly/Range.h>
+#include <folly/ScopeGuard.h>
 
 using apache::thrift::protocol::TType;
 using apache::thrift::BinaryProtocolReaderWithRefill;
@@ -361,9 +363,9 @@ static bool encode_impl(Writer *writer, PyObject *value, PyObject *typeargs,
       }
 
 #if PY_MAJOR_VERSION >= 3
-      folly::StringPiece str(PyBytes_AsString(value));
+      folly::StringPiece str(PyBytes_AsString(value), len);
 #else
-      folly::StringPiece str(PyString_AsString(value));
+      folly::StringPiece str(PyString_AsString(value), len);
 #endif
       writer->writeString(str);
       if (encoded) {
@@ -835,6 +837,11 @@ decode_val(Reader *reader, TType type, PyObject *typeargs, int utf8strings) {
 
       reader->readMapBegin(ktype, vtype, len);
       if (ktype != parsedargs.ktype || vtype != parsedargs.vtype) {
+        if (len == 0 &&
+            std::is_same<Reader, CompactProtocolReaderWithRefill>::value) {
+          reader->readMapEnd();
+          return PyDict_New();
+        }
         PyErr_SetString(PyExc_TypeError,
             "got wrong ttype while reading map field");
         return nullptr;
@@ -861,7 +868,15 @@ decode_val(Reader *reader, TType type, PyObject *typeargs, int utf8strings) {
           Py_DECREF(k);
           return nullptr;
         }
-        PyDict_SetItem(ret, k, v);
+        if (PyDict_SetItem(ret, k, v) == -1) {
+          Py_DECREF(ret);
+          Py_DECREF(k);
+          Py_DECREF(v);
+          return nullptr;
+        }
+
+        Py_DECREF(k);
+        Py_DECREF(v);
       }
 
       reader->readMapEnd();
@@ -923,8 +938,11 @@ encodeT(PyObject *enc_obj, PyObject *spec, int utf8strings) {
 }
 
 static std::unique_ptr<folly::IOBuf> refill(DecodeBuffer *input,
-    const uint8_t *remaining, int rlen, int len) {
+    const uint8_t *remaining, int rlen, int read, int len) {
   PyObject *newiobuf;
+
+  IOobject *ioobj = IOOOBJECT(input->stringiobuf);
+  ioobj->pos += read;
 
 #if PY_MAJOR_VERSION >= 3
   newiobuf = PyObject_CallFunction(input->refill_callable, (char*)"y#i",
@@ -940,7 +958,7 @@ static std::unique_ptr<folly::IOBuf> refill(DecodeBuffer *input,
   Py_CLEAR(input->stringiobuf);
   input->stringiobuf = newiobuf;
 
-  IOobject *ioobj = IOOOBJECT(newiobuf);
+  ioobj = IOOOBJECT(newiobuf);
   // This IOBuf is returned to the protocol reader and it doesn't own
   // the underlying buffer. The protocol reader should only call refill
   // when it no longer needs its current IOBuf because the underlying
@@ -953,8 +971,11 @@ template<typename Reader>
 static bool
 decodeT(DecodeBuffer *input, PyObject *dec_obj, StructTypeArgs *args,
     int utf8strings) {
-  auto refiller = [input] (const uint8_t* remaining, int rlen, int len) {
-    return refill(input, remaining, rlen, len);
+  auto refiller = [input] (const uint8_t* remaining,
+                           int rlen,
+                           int read,
+                           int len) {
+    return refill(input, remaining, rlen, read, len);
   };
   Reader reader(refiller);
   IOobject *ioobj = IOOOBJECT(input->stringiobuf);
@@ -962,7 +983,15 @@ decodeT(DecodeBuffer *input, PyObject *dec_obj, StructTypeArgs *args,
         ioobj->string_size - ioobj->pos);
   reader.setInput(buf.get());
 
-  return decode_struct(&reader, dec_obj, args, utf8strings);
+  try {
+    bool ret = decode_struct(&reader, dec_obj, args, utf8strings);
+    ioobj = IOOOBJECT(input->stringiobuf);
+    ioobj->pos += reader.totalBytesRead();
+    return ret;
+  } catch (const std::runtime_error& e) {
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    return false;
+  }
 }
 
 static PyObject*
@@ -1027,25 +1056,25 @@ decode(PyObject *self, PyObject *args, PyObject *kws) {
     return nullptr;
   }
 
+  SCOPE_EXIT {
+    free_decodebuf(&input);
+  };
+
   if (protoid == 0) {
     if (!decodeT<BinaryProtocolReaderWithRefill>(&input, dec_obj,
           &parsedargs, utf8strings)) {
-      free_decodebuf(&input);
       return nullptr;
     }
   } else if (protoid == 2) {
     if (!decodeT<CompactProtocolReaderWithRefill>(&input, dec_obj,
           &parsedargs, utf8strings)) {
-      free_decodebuf(&input);
       return nullptr;
     }
   } else {
     PyErr_SetString(PyExc_TypeError, "Unexpected proto id");
-    free_decodebuf(&input);
     return nullptr;
   }
 
-  free_decodebuf(&input);
   Py_RETURN_NONE;
 }
 

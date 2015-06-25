@@ -23,6 +23,7 @@
 #include <deque>
 #include <getopt.h>
 #include <gtest/gtest.h>
+#include <glog/logging.h>
 #include <sys/time.h>
 
 #include <thrift/lib/cpp/concurrency/Mutex.h>
@@ -93,7 +94,7 @@ class FsyncTimer : public FsyncHandler {
     }
   }
 
-  virtual int fsync(int fd) {
+  int fsync(int fd) override {
     TimePoint now;
     Guard g(mutex_);
 

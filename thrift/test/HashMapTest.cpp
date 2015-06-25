@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 #define BOOST_TEST_MODULE HashMapTest
 #include <boost/test/unit_test.hpp>
 #include "thrift/test/gen-cpp/HashMapTest_types.h"

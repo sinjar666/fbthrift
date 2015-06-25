@@ -17,8 +17,8 @@
 #ifndef _THRIFT_TRANSPORT_TCALLBACKTRANSPORT_H_
 #define _THRIFT_TRANSPORT_TCALLBACKTRANSPORT_H_ 1
 
-#include "TTransport.h"
-#include "TVirtualTransport.h"
+#include <thrift/lib/cpp/transport/TTransport.h>
+#include <thrift/lib/cpp/transport/TVirtualTransport.h>
 
 namespace apache { namespace thrift { namespace transport {
 
@@ -34,13 +34,13 @@ class TCallbackTransport : public TVirtualTransport<TCallbackTransport> {
 
   TCallbackTransport() {}
 
-  ~TCallbackTransport() {}
+  ~TCallbackTransport() override {}
 
-  bool isOpen() { return true; }
+  bool isOpen() override { return true; }
 
-  void open() {}
+  void open() override {}
 
-  void close() {}
+  void close() override {}
 
   uint32_t read(uint8_t* buf, uint32_t len);
 

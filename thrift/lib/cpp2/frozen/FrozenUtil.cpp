@@ -24,8 +24,7 @@ FrozenFileForwardIncompatible::FrozenFileForwardIncompatible(int fileVersion)
           "Frozen File version ",
           fileVersion,
           " cannot be read, only versions up to ",
-          schema::g_frozen_constants.kCurrentFrozenFileVersion,
+          schema::frozen_constants::kCurrentFrozenFileVersion_,
           " are supported.")),
       fileVersion_(fileVersion) {}
-
 }}}

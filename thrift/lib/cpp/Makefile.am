@@ -41,6 +41,17 @@ AM_LDFLAGS = $(BOOST_LDFLAGS)
 libthrift_la_SOURCES = EventHandlerBase.cpp \
                        Thrift.cpp \
                        VirtualProfiling.cpp \
+                       async/TAsyncSocketFactory.cpp \
+                       async/TAsyncSSLSocketFactory.cpp \
+                       async/TBinaryAsyncChannel.cpp \
+                       async/TEventConnection.cpp \
+                       async/TEventServer.cpp \
+                       async/TEventTask.cpp \
+                       async/TEventWorker.cpp \
+                       async/TFramedAsyncChannel.cpp \
+                       async/THeaderAsyncChannel.cpp \
+                       async/THttpAsyncChannel.cpp \
+                       async/TUnframedAsyncChannel.cpp \
                        concurrency/ThreadManager.cpp \
                        concurrency/TimerManager.cpp \
                        concurrency/Util.cpp \
@@ -48,6 +59,7 @@ libthrift_la_SOURCES = EventHandlerBase.cpp \
                        protocol/TJSONProtocol.cpp \
                        protocol/TBase64Utils.cpp \
                        protocol/TMultiplexedProtocol.cpp \
+                       protocol/TSimpleJSONProtocol.cpp \
                        transport/TTransportException.cpp \
                        transport/TFDTransport.cpp \
                        transport/TFileTransport.cpp \
@@ -58,6 +70,7 @@ libthrift_la_SOURCES = EventHandlerBase.cpp \
                        transport/THttpServer.cpp \
                        transport/TSocket.cpp \
                        transport/TSSLSocket.cpp \
+                       transport/TSocketOverHttpTunnel.cpp \
                        transport/TSocketPool.cpp \
                        transport/TServerSocket.cpp \
                        transport/TSSLServerSocket.cpp \
@@ -76,10 +89,14 @@ libthrift_la_SOURCES += concurrency/Mutex.cpp \
                         concurrency/PosixThreadFactory.cpp \
                         concurrency/ProfiledMutex.cpp
 
-libthriftz_la_SOURCES = transport/TZlibTransport.cpp
+libthriftz_la_SOURCES = \
+                       async/TZlibAsyncChannel.cpp \
+                       transport/TZlibTransport.cpp
 
 
 # Flags for the various libraries
+libthrift_la_LIBADD     = $(FOLLY_LIBS) -lboost_system -lboost_thread
+
 libthriftz_la_CPPFLAGS  = $(AM_CPPFLAGS) $(ZLIB_CPPFLAGS)
 libthriftz_la_CXXFLAGS  = $(AM_CXXFLAGS)
 libthriftz_la_LDFLAGS   = -version-info $(LT_VERSION) $(BOOST_LDFLAGS)
@@ -127,6 +144,7 @@ include_protocol_HEADERS = \
                          protocol/TProtocolTap.h \
                          protocol/TProtocolException.h \
                          protocol/TVirtualProtocol.h \
+                         protocol/TType.h \
                          protocol/TProtocol.h
 
 
@@ -145,6 +163,7 @@ include_transport_HEADERS = \
                          transport/THttpServer.h \
                          transport/TSocket.h \
                          transport/TSocketAddress.h \
+                         transport/TSocketOverHttpTunnel.h \
                          transport/TSSLSocket.h \
                          transport/TSocketPool.h \
                          transport/TVirtualTransport.h \
@@ -172,17 +191,19 @@ include_asyncdir = $(include_thriftdir)/async
 include_async_HEADERS = \
                      async/HHWheelTimer.h \
                      async/Request.h \
+                     async/SimpleCallback.h \
                      async/TAsyncChannel.h \
-                     async/TAsyncSignalHandler.h \
                      async/TAsyncDispatchProcessor.h \
+                     async/TAsyncEventChannel.h \
                      async/TAsyncProcessor.h \
-                     async/TAsyncSSLSocket.h \
-                     async/TAsyncSSLSocketFactory.h \
-                     async/TAsyncSocket.h \
                      async/TAsyncServerSocket.h \
                      async/TAsyncSocketFactory.h \
+                     async/TAsyncSocket.h \
+                     async/TAsyncSSLSocketFactory.h \
+                     async/TAsyncSSLSocket.h \
                      async/TAsyncTimeout.h \
                      async/TAsyncTransport.h \
+                     async/TBinaryAsyncChannel.h \
                      async/TDelayedDestruction.h \
                      async/TEventBase.h \
                      async/TEventBaseManager.h \
@@ -190,8 +211,19 @@ include_async_HEADERS = \
                      async/TEventFDWrapper.h \
                      async/TEventHandler.h \
                      async/TEventJobQueue.h \
+                     async/TEventServer.h \
+                     async/TEventTask.h \
+                     async/TEventWorker.h \
+                     async/TFramedAsyncChannel.h \
+                     async/THeaderAsyncChannel.h \
+                     async/THttpAsyncChannel.h \
+                     async/TimeoutManager.h \
                      async/TNotificationQueue.h \
-                     async/TimeoutManager.h
+                     async/TQueuingAsyncProcessor.h \
+                     async/TStreamAsyncChannel.h \
+                     async/TSyncToAsyncProcessor.h \
+                     async/TUnframedAsyncChannel.h \
+                     async/TZlibAsyncChannel.h
 
 include_utildir = $(include_thriftdir)/util
 include_util_HEADERS = \

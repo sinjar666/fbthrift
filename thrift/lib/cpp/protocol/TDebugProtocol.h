@@ -167,9 +167,10 @@ class TDebugProtocol : public TVirtualProtocol<TDebugProtocol> {
 class TDebugProtocolFactory : public TProtocolFactory {
  public:
   TDebugProtocolFactory() {}
-  virtual ~TDebugProtocolFactory() {}
+  ~TDebugProtocolFactory() override {}
 
-  std::shared_ptr<TProtocol> getProtocol(std::shared_ptr<TTransport> trans) {
+  std::shared_ptr<TProtocol> getProtocol(
+      std::shared_ptr<TTransport> trans) override {
     return std::shared_ptr<TProtocol>(new TDebugProtocol(trans));
   }
 
@@ -361,12 +362,16 @@ public:
 };
 
 template<typename T>
-std::string ThriftDebugString(const T& ts) {
+std::string ThriftDebugString(const T& ts, int32_t string_limit=0) {
   using namespace apache::thrift::transport;
   using namespace apache::thrift::protocol;
   TMemoryBuffer* buffer = new TMemoryBuffer;
   std::shared_ptr<TTransport> trans(buffer);
   TDebugProtocolEx protocol(trans);
+  if (string_limit > 0) {
+    // override the default
+    protocol.setStringSizeLimit(string_limit);
+  }
 
   protocol.write(ts);
 
@@ -392,5 +397,12 @@ std::ostream& operator<<(std::ostream& os,
 
 }} // apache::thrift
 
+template <class T,
+          class Enable = typename std::enable_if<
+              std::is_base_of<apache::thrift::TStructType<T>, T>::value>::type>
+std::ostream& operator<<(std::ostream& os, const T& value) {
+  os << apache::thrift::ThriftDebugString(value);
+  return os;
+}
 
 #endif // #ifndef _THRIFT_PROTOCOL_TDEBUGPROTOCOL_H_

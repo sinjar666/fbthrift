@@ -38,6 +38,7 @@ from mySetStruct.ttypes import *
 from myMapStruct.ttypes import *
 from myNestedMapStruct.ttypes import *
 from mySimpleStruct.ttypes import *
+from ThriftTest.ttypes import WithAnnotations
 
 #import logging
 #log = logging.getLogger()
@@ -160,6 +161,42 @@ class ValidationTest(unittest.TestCase):
             maps={"1": {"1": mySimpleStruct(c=1)},
             "2": {"2": mySimpleStruct(a=0, c=2)}}
             ))
+
+    def testEnumSpec(self):
+        self.assertTrue(
+            hasattr(myComplexStruct.thrift_spec[4][3], '_NAMES_TO_VALUES'))
+
+    def testAnnotations(self):
+        self.assertTrue(hasattr(WithAnnotations, 'thrift_field_annotations'))
+        self.assertTrue(hasattr(WithAnnotations, 'thrift_struct_annotations'))
+        self.assertEquals(
+            WithAnnotations.thrift_field_annotations,
+            {
+                1: {
+                    'test.annotation': 'none',
+                    'test.hidden': '1',
+                },
+                3: {
+                    'test.hidden': '3',
+                },
+            },
+        )
+        self.assertEquals(
+            WithAnnotations.thrift_struct_annotations,
+            {
+                'test.struct_annotation': 'ok',
+                'test.partial': '1',
+                'test.complex': """
+   public:
+
+    bool empty() const {
+      return !(__isset.m1 ||
+               __isset.m2 ||
+               __isset.s1);
+    }
+  """,
+            },
+        )
 
 if __name__ == "__main__":
     unittest.main()

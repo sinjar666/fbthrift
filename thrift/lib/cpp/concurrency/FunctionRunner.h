@@ -19,6 +19,7 @@
 
 #include <unistd.h>
 #include <functional>
+#include <thrift/lib/cpp/concurrency/Monitor.h>
 #include <thrift/lib/cpp/concurrency/Thread.h>
 
 namespace apache { namespace thrift { namespace concurrency {
@@ -80,7 +81,7 @@ class FunctionRunner : public Runnable {
    * execute the given callback.  Note that the 'void*' return value is ignored.
    */
   FunctionRunner(PthreadFuncPtr func, void* arg)
-   : func_(std::bind(func, arg)), repFunc_(0), initFunc_(0)
+   : func_([=]{ func(arg); }), repFunc_(0), initFunc_(0)
   { }
 
   /**
@@ -101,7 +102,11 @@ class FunctionRunner : public Runnable {
   FunctionRunner(F&& cob, int intervalMs)
    : func_(0), repFunc_(std::forward<F>(cob)), intervalMs_(intervalMs),
      initFunc_(0)
-  { }
+  {
+    if (intervalMs_ < 0) {
+      throw InvalidArgumentException();
+    }
+  }
 
   /**
    * Set a callback to be called when the thread is started.
@@ -110,24 +115,40 @@ class FunctionRunner : public Runnable {
     initFunc_ = initFunc;
   }
 
-  void run() {
+  void run() override {
+    apache::thrift::concurrency::Synchronized s(monitor_);
     if (initFunc_) {
       initFunc_();
     }
-    if (repFunc_) {
-      while(repFunc_()) {
-        usleep(intervalMs_*1000);
+    if (intervalMs_ != -1) {
+      while (repFunc_ && repFunc_()) {
+        try {
+          // this wait could time out (normal interval-"sleep" case),
+          // or the monitor_ could have been notify()'ed by stop method.
+          monitor_.waitForTimeRelative(intervalMs_);
+        } catch (const TimedOutException& te) { /* restart loop */ }
       }
     } else {
       func_();
     }
   }
 
+  void stop() {
+    apache::thrift::concurrency::Synchronized s(monitor_);
+    if (repFunc_) {
+      repFunc_ = nullptr;
+      monitor_.notify();
+    }
+  }
+
+  ~FunctionRunner() override { stop(); }
+
  private:
   VoidFunc func_;
   BoolFunc repFunc_;
-  int intervalMs_;
+  const int intervalMs_ {-1};  // -1 iff invalid (no periodic function)
   VoidFunc initFunc_;
+  Monitor monitor_;
 };
 
 }}} // apache::thrift::concurrency

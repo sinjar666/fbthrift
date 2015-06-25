@@ -62,7 +62,7 @@ class TKerberosException: public
   explicit TKerberosException(const std::string& message):
     TTransportException(TTransportException::INTERNAL_ERROR, message) {}
 
-  virtual const char* what() const throw() {
+  const char* what() const throw() override {
     if (message_.empty()) {
       return "TKerberosException";
     } else {
@@ -77,6 +77,12 @@ enum PhaseType {
   CONTEXT_NEGOTIATION_COMPLETE,
   SELECT_SECURITY_LAYER,
   COMPLETE
+};
+
+enum class SecurityMech {
+  KRB5_SASL,
+  KRB5_GSS,
+  KRB5_GSS_NO_MUTUAL,
 };
 
 /**

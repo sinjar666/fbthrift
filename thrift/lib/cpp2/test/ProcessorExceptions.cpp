@@ -38,6 +38,7 @@
 
 #include <thrift/lib/cpp2/async/StubSaslClient.h>
 #include <thrift/lib/cpp2/async/StubSaslServer.h>
+#include <thrift/lib/cpp2/TestServer.h>
 
 #include <boost/cast.hpp>
 #include <memory>
@@ -50,9 +51,7 @@ using apache::thrift::TApplicationException;
 
 class SampleServiceHandler : public SampleServiceSvIf {
 public:
-  int32_t return42(const MyArgs& unused, int32_t i) {
-    return 42;
-  }
+ int32_t return42(const MyArgs& unused, int32_t i) override { return 42; }
 };
 
 bool Inner::operator <(const Inner& r) const {
@@ -72,7 +71,8 @@ std::shared_ptr<ThriftServer> getServer() {
 }
 
 int32_t call_return42(std::function<void(MyArgs2&)> isset_cb) {
-  ScopedServerThread sst(getServer());
+  apache::thrift::TestThriftServerFactory<SampleServiceHandler> factory;
+  ScopedServerThread sst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *sst.getAddress()));
