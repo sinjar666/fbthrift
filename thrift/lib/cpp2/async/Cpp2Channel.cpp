@@ -65,7 +65,7 @@ Cpp2Channel::Cpp2Channel(
   transportHandler_ = pipeline_->getHandler<TAsyncTransportHandler>(0);
 }
 
-folly::Future<void> Cpp2Channel::close(Context* ctx) {
+folly::Future<folly::Unit> Cpp2Channel::close(Context* ctx) {
   DestructorGuard dg(this);
   processReadEOF();
   return ctx->fireClose();
@@ -142,7 +142,8 @@ void Cpp2Channel::writeSuccess() noexcept {
   assert(sendCallbacks_.size() > 0);
 
   DestructorGuard dg(this);
-  for (auto& cb : sendCallbacks_.front()) {
+  auto* cb = sendCallbacks_.front();
+  if (cb) {
     cb->messageSent();
   }
   sendCallbacks_.pop_front();
@@ -156,7 +157,8 @@ void Cpp2Channel::writeError(size_t bytesWritten,
 
   DestructorGuard dg(this);
   VLOG(5) << "Got a write error: " << folly::exceptionStr(ex);
-  for (auto& cb : sendCallbacks_.front()) {
+  auto* cb = sendCallbacks_.front();
+  if (cb) {
     cb->messageSendError(
         folly::make_exception_wrapper<TTransportException>(ex));
   }
@@ -190,17 +192,15 @@ void Cpp2Channel::sendMessage(SendCallback* callback,
     return;
   }
 
-  std::vector<SendCallback*> cbs;
   if (callback) {
     callback->sendQueued();
-    cbs.push_back(callback);
   }
-  sendCallbacks_.push_back(std::move(cbs));
+  sendCallbacks_.push_back(callback);
 
   DestructorGuard dg(this);
 
   auto future = pipeline_->write(std::move(buf));
-  future.then([this,dg](folly::Try<void>&& t) {
+  future.then([this,dg](folly::Try<folly::Unit>&& t) {
     if (t.withException<TTransportException>(
           [&](const TTransportException& ex) {
             writeError(0, ex);

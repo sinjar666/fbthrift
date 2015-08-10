@@ -28,9 +28,9 @@
 #include <thrift/lib/cpp2/protocol/Protocol.h>
 #include <folly/ExceptionWrapper.h>
 #include <folly/String.h>
-#include <folly/wangle/rx/Subject.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/MoveWrapper.h>
+#include <wangle/deprecated/rx/Subject.h>
 
 #include <glog/logging.h>
 
@@ -187,7 +187,7 @@ class FunctionSendCallback : public RequestCallback {
     auto cb = std::move(callback_);
     cb(std::move(state));
   }
-  void replyReceived(ClientReceiveState&& state) override {}
+  void replyReceived(ClientReceiveState&& /*state*/) override {}
  private:
   std::function<void (ClientReceiveState&&)> callback_;
 };

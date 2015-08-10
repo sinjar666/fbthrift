@@ -70,7 +70,7 @@ class Cpp2ConnContext : public apache::thrift::server::TConnectionContext {
     cleanupUserData();
   }
 
-  apache::thrift::transport::THeader* getHeader() override {
+  apache::thrift::transport::THeader* getHeader() const override {
     return header_;
   }
 
@@ -143,7 +143,7 @@ class Cpp2RequestContext : public apache::thrift::server::TConnectionContext {
   }
 
   // The following two header functions _are_ thread safe
-  std::map<std::string, std::string> getHeaders() override {
+  std::map<std::string, std::string> getHeaders() const override {
     return headers_;
   }
 
@@ -229,13 +229,21 @@ class Cpp2RequestContext : public apache::thrift::server::TConnectionContext {
     startedProcessing_ = true;
   }
 
+  std::chrono::milliseconds getRequestTimeout() const {
+    return requestTimeout_;
+  }
+
+  void setRequestTimeout(std::chrono::milliseconds requestTimeout) {
+    requestTimeout_ = requestTimeout;
+  }
+
  protected:
   // Note:  Header is _not_ thread safe
-  apache::thrift::transport::THeader* getHeader() override {
+  apache::thrift::transport::THeader* getHeader() const override {
     return ctx_->getHeader();
   }
 
-  static void no_op_destructor(void* ptr) {}
+  static void no_op_destructor(void* /*ptr*/) {}
 
  private:
   Cpp2ConnContext* ctx_;
@@ -249,6 +257,7 @@ class Cpp2RequestContext : public apache::thrift::server::TConnectionContext {
   uint32_t minCompressBytes_;
   PriorityThreadManager::PRIORITY callPriority_;
   bool startedProcessing_ = false;
+  std::chrono::milliseconds requestTimeout_{0};
 };
 
 } }

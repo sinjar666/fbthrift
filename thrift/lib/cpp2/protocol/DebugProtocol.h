@@ -31,7 +31,8 @@ std::string debugString(const T& obj);
 
 class DebugProtocolWriter {
  public:
-  DebugProtocolWriter();
+  explicit DebugProtocolWriter(
+      ExternalBufferSharing sharing = COPY_EXTERNAL_BUFFER /* ignored */);
 
   static inline ProtocolType protocolType() {
     return ProtocolType::T_DEBUG_PROTOCOL;
@@ -68,7 +69,7 @@ class DebugProtocolWriter {
   uint32_t writeBinary(const StrType& str) { writeSP(str); return 0; }
   uint32_t writeBinary(const std::unique_ptr<folly::IOBuf>& str);
   uint32_t writeBinary(const folly::IOBuf& str);
-  uint32_t writeSerializedData(const std::unique_ptr<folly::IOBuf>& data) {
+  uint32_t writeSerializedData(const std::unique_ptr<folly::IOBuf>& /*data*/) {
     //TODO
     return 0;
   }

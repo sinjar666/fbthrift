@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <folly/wangle/channel/Handler.h>
+#include <wangle/channel/Handler.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/IOBufQueue.h>
 #include <thrift/lib/cpp2/async/SaslEndpoint.h>
@@ -34,10 +34,7 @@ class ProtectionHandler : public folly::wangle::BytesToBytesHandler {
     WAITING,
   };
 
-  ProtectionHandler()
-    : protectionState_(ProtectionState::UNKNOWN)
-    , saslEndpoint_(nullptr)
-  {}
+  ProtectionHandler() {}
 
   void setProtectionState(ProtectionState protectionState,
                           SaslEndpoint* saslEndpoint = nullptr) {
@@ -71,17 +68,18 @@ class ProtectionHandler : public folly::wangle::BytesToBytesHandler {
   /**
    * Encrypt an IOBuf
    */
-  folly::Future<void> write(
+  folly::Future<folly::Unit> write(
     Context* ctx,
     std::unique_ptr<folly::IOBuf> buf) override;
 
 
-  folly::Future<void> close(Context* ctx) override;
+  folly::Future<folly::Unit> close(Context* ctx) override;
 
  private:
-  ProtectionState protectionState_;
-  SaslEndpoint* saslEndpoint_;
+  ProtectionState protectionState_{ProtectionState::UNKNOWN};
+  SaslEndpoint* saslEndpoint_{nullptr};
   folly::IOBufQueue queue_{folly::IOBufQueue::cacheChainLength()};
+  bool allowFallback_{true};
 
   bool closing_{false};
 

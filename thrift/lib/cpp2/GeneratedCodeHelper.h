@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <folly/futures/Future.h>
 #include <folly/Traits.h>
+#include <thrift/lib/cpp2/async/AsyncProcessor.h>
 #include <thrift/lib/cpp2/Thrift.h>
 #include <type_traits>
 
@@ -33,7 +35,7 @@ struct ForEachImpl {
 };
 template <int Size, class F, class Tuple>
 struct ForEachImpl<Size, Size, F, Tuple> {
-  static uint32_t forEach(Tuple&& tuple, F&& f) {
+  static uint32_t forEach(Tuple&& /*tuple*/, F&& /*f*/) {
     return 0;
   }
 };
@@ -151,8 +153,12 @@ FOLLY_CREATE_HAS_MEMBER_FN_TRAITS(push_back_checker, push_back);
 FOLLY_CREATE_HAS_MEMBER_FN_TRAITS(insert_checker, insert);
 FOLLY_CREATE_HAS_MEMBER_FN_TRAITS(reserve_checker, reserve);
 
+// The std::vector<bool> specialization in gcc provides a push_back(bool)
+// method, rather than a push_back(bool&&) like the generic std::vector<T>
 template <class C>
-using is_vector_like = push_back_checker<C, void(typename C::value_type&&)>;
+using is_vector_like = std::integral_constant<bool,
+    push_back_checker<C, void(typename C::value_type&&)>::value ||
+    push_back_checker<C, void(typename C::value_type)>::value>;
 
 template <class C>
 using has_insert = insert_checker<C,
@@ -185,8 +191,8 @@ struct Reserver<T, typename std::enable_if<has_reserve<T>::value>::type> {
 
 template <bool hasIsSet, size_t count>
 struct IsSetHelper {
-  void setIsSet(size_t index, bool value = true) { }
-  bool getIsSet(size_t index) const { return true; }
+  void setIsSet(size_t /*index*/, bool /*value*/ = true) { }
+  bool getIsSet(size_t /*index*/) const { return true; }
 };
 
 template <size_t count>
@@ -568,6 +574,36 @@ class Cpp2Ops<float> {
 };
 
 
+namespace detail {
+
+template <class Protocol, class V>
+uint32_t readIntoVector(Protocol* prot, V& vec) {
+  typedef typename V::value_type ElemType;
+  uint32_t xfer = 0;
+  for (auto& e : vec) {
+    xfer += Cpp2Ops<ElemType>::read(prot, &e);
+  }
+  return xfer;
+}
+
+template <class Protocol>
+uint32_t readIntoVector(Protocol* prot, std::vector<bool>& vec) {
+  uint32_t xfer = 0;
+  for (auto e : vec) {
+    // e is a proxy object because the elements don't have distinct addresses
+    // (packed into a bitvector). We actually copy the proxy during iteration
+    // (can't use non-const reference because iteration returns by value, can't
+    // use const reference because we modify it), but it still points to the
+    // actual element.
+    bool b;
+    xfer += Cpp2Ops<bool>::read(prot, &b);
+    e = b;
+  }
+  return xfer;
+}
+
+}
+
 template <class L>
 class Cpp2Ops<L, typename std::enable_if<detail::is_vector_like<L>::value>::type> {
  public:
@@ -588,16 +624,13 @@ class Cpp2Ops<L, typename std::enable_if<detail::is_vector_like<L>::value>::type
   }
   template <class Protocol>
   static uint32_t read(Protocol* prot, Type* value) {
-    typedef typename Type::value_type ElemType;
     value->clear();
     uint32_t xfer = 0;
     uint32_t size;
     protocol::TType etype;
     xfer += prot->readListBegin(etype, size);
     value->resize(size);
-    for (auto& e : *value) {
-      xfer += Cpp2Ops<ElemType>::read(prot, &e);
-    }
+    xfer += detail::readIntoVector(prot, *value);
     xfer += prot->readListEnd();
     return xfer;
   }
@@ -807,5 +840,300 @@ class Cpp2Ops<std::unique_ptr<folly::IOBuf>> {
     return prot->serializedSizeZCBinary(*value);
   }
 };
+
+class BinaryProtocolReader;
+class BinaryProtocolWriter;
+class CompactProtocolReader;
+class CompactProtocolWriter;
+
+//  AsyncProcessor helpers
+namespace detail { namespace ap {
+
+//  Everything templated on only protocol goes here. The corresponding .cpp file
+//  explicitly instantiates this struct for each supported protocol.
+template <typename ProtocolReader, typename ProtocolWriter>
+struct helper {
+
+  static folly::IOBufQueue write_exn(
+      const char* method,
+      ProtocolWriter* prot,
+      int32_t protoSeqId,
+      ContextStack* ctx,
+      const TApplicationException& x);
+
+  static void process_exn(
+      const char* func,
+      const std::string& msg,
+      std::unique_ptr<ResponseChannel::Request> req,
+      Cpp2RequestContext* ctx,
+      async::TEventBase* eb,
+      int32_t protoSeqId);
+
+};
+
+template <typename ProtocolReader>
+using writer_of = typename ProtocolReader::ProtocolWriter;
+template <typename ProtocolWriter>
+using reader_of = typename ProtocolWriter::ProtocolReader;
+
+template <typename ProtocolReader>
+using helper_r = helper<ProtocolReader, writer_of<ProtocolReader>>;
+template <typename ProtocolWriter>
+using helper_w = helper<reader_of<ProtocolWriter>, ProtocolWriter>;
+
+template <typename T>
+using is_root_async_processor = std::is_void<typename T::BaseAsyncProcessor>;
+
+template <class ProtocolReader, class Processor>
+typename std::enable_if<is_root_async_processor<Processor>::value>::type
+process_missing(
+    Processor* processor,
+    const std::string& fname,
+    std::unique_ptr<ResponseChannel::Request> req,
+    std::unique_ptr<folly::IOBuf> buf,
+    Cpp2RequestContext* ctx,
+    async::TEventBase* eb,
+    concurrency::ThreadManager* tm,
+    int32_t protoSeqId) {
+  using h = helper_r<ProtocolReader>;
+  const char* fn = "process";
+  const auto msg = folly::sformat("Method name {} not found", fname);
+  return h::process_exn(fn, msg, std::move(req), ctx, eb, protoSeqId);
+}
+
+template <class ProtocolReader, class Processor>
+typename std::enable_if<!is_root_async_processor<Processor>::value>::type
+process_missing(
+    Processor* processor,
+    const std::string& /*fname*/,
+    std::unique_ptr<ResponseChannel::Request> req,
+    std::unique_ptr<folly::IOBuf> buf,
+    Cpp2RequestContext* ctx,
+    async::TEventBase* eb,
+    concurrency::ThreadManager* tm,
+    int32_t /*protoSeqId*/) {
+  auto protType = ProtocolReader::protocolType();
+  processor->Processor::BaseAsyncProcessor::process(
+      std::move(req), std::move(buf), protType, ctx, eb, tm);
+}
+
+template <class ProtocolReader, class Processor>
+void process_pmap(
+    Processor* proc,
+    const typename GeneratedAsyncProcessor::ProcessMap<
+        typename GeneratedAsyncProcessor::ProcessFunc<
+            Processor, ProtocolReader>>& pmap,
+    std::unique_ptr<ResponseChannel::Request> req,
+    std::unique_ptr<folly::IOBuf> buf,
+    Cpp2RequestContext* ctx,
+    async::TEventBase* eb,
+    concurrency::ThreadManager* tm) {
+  using h = helper_r<ProtocolReader>;
+  const char* fn = "process";
+  std::string fname;
+  MessageType mtype;
+  int32_t protoSeqId = 0;
+  auto iprot = folly::make_unique<ProtocolReader>();
+  iprot->setInput(buf.get());
+  try {
+    iprot->readMessageBegin(fname, mtype, protoSeqId);
+  } catch (const TException& ex) {
+    LOG(ERROR) << "received invalid message from client: " << ex.what();
+    const char* msg = "invalid message from client";
+    return h::process_exn(fn, msg, std::move(req), ctx, eb, protoSeqId);
+  }
+  if (mtype != T_CALL && mtype != T_ONEWAY) {
+    LOG(ERROR) << "received invalid message of type " << mtype;
+    const char* msg = "invalid message arguments";
+    return h::process_exn(fn, msg, std::move(req), ctx, eb, protoSeqId);
+  }
+  auto pfn = pmap.find(fname);
+  if (pfn == pmap.end()) {
+    process_missing<ProtocolReader>(
+        proc, fname, std::move(req), std::move(buf), ctx, eb, tm, protoSeqId);
+    return;
+  }
+  (proc->*(pfn->second))(
+      std::move(req), std::move(buf), std::move(iprot), ctx, eb, tm);
+}
+
+//  Generated AsyncProcessor::process just calls this.
+template <class Processor>
+void process(
+    Processor* processor,
+    std::unique_ptr<ResponseChannel::Request> req,
+    std::unique_ptr<folly::IOBuf> buf,
+    protocol::PROTOCOL_TYPES protType,
+    Cpp2RequestContext* ctx,
+    async::TEventBase* eb,
+    concurrency::ThreadManager* tm) {
+  switch (protType) {
+    case protocol::T_BINARY_PROTOCOL: {
+      const auto& pmap = processor->getBinaryProtocolProcessMap();
+      return process_pmap(
+          processor, pmap, std::move(req), std::move(buf), ctx, eb, tm);
+    }
+    case protocol::T_COMPACT_PROTOCOL: {
+      const auto& pmap = processor->getCompactProtocolProcessMap();
+      return process_pmap(
+          processor, pmap, std::move(req), std::move(buf), ctx, eb, tm);
+    }
+    default:
+      LOG(ERROR) << "invalid protType: " << protType;
+      return;
+  }
+}
+
+//  Generated AsyncProcessor::getCacheKey just calls this.
+folly::Optional<std::string> get_cache_key(
+    const folly::IOBuf* buf,
+    const protocol::PROTOCOL_TYPES protType,
+    const std::unordered_map<std::string, int16_t>& cache_key_map);
+
+//  Generated AsyncProcessor::isOnewayMethod just calls this.
+bool is_oneway_method(
+    const folly::IOBuf* buf,
+    const transport::THeader* header,
+    const std::unordered_set<std::string>& oneways);
+
+}} // detail::ap
+
+//  ServerInterface helpers
+namespace detail { namespace si {
+
+template <typename F>
+using ret = typename std::result_of<F()>::type;
+template <typename F>
+using ret_lift = typename folly::Unit::Lift<ret<F>>::type;
+template <typename F>
+using fut_ret = typename ret<F>::value_type;
+template <typename F>
+using fut_ret_drop = typename folly::Unit::Drop<fut_ret<F>>::type;
+template <typename T>
+struct action_traits_impl;
+template <typename C, typename A>
+struct action_traits_impl<void(C::*)(A&) const> { using arg_type = A; };
+template <typename C, typename A>
+struct action_traits_impl<void(C::*)(A&)> { using arg_type = A; };
+template <typename F>
+using action_traits = action_traits_impl<decltype(&F::operator())>;
+template <typename F>
+using arg = typename action_traits<F>::arg_type;
+
+template <class F>
+folly::Future<ret_lift<F>>
+future(F&& f) {
+  return folly::makeFutureWith(std::forward<F>(f));
+}
+
+template <class F>
+arg<F>
+returning(F&& f) {
+  arg<F> ret;
+  f(ret);
+  return ret;
+}
+
+template <class F>
+folly::Future<arg<F>>
+future_returning(F&& f) {
+  return future([&]() {
+      return returning(std::forward<F>(f));
+  });
+}
+
+template <class F>
+std::unique_ptr<arg<F>>
+returning_uptr(F&& f) {
+  auto ret = folly::make_unique<arg<F>>();
+  f(*ret);
+  return ret;
+}
+
+template <class F>
+folly::Future<std::unique_ptr<arg<F>>>
+future_returning_uptr(F&& f) {
+  return future([&]() {
+      return returning_uptr(std::forward<F>(f));
+  });
+}
+
+template <class F>
+void
+swallowing(F&& f) {
+  try { f(); }
+  catch(...) { }
+}
+
+template <class R>
+folly::Future<R>
+future_exn(std::exception_ptr ex) {
+  return folly::makeFuture<R>(folly::exception_wrapper(std::move(ex)));
+}
+
+template <class F>
+ret<F>
+future_catching(F&& f) {
+  try { return f(); }
+  catch(...) { return future_exn<fut_ret<F>>(std::current_exception()); }
+}
+
+using CallbackBase = HandlerCallbackBase;
+using CallbackBasePtr = std::unique_ptr<CallbackBase>;
+template <class R> using Callback = HandlerCallback<fut_ret_drop<R>>;
+template <class R> using CallbackPtr = std::unique_ptr<Callback<R>>;
+
+template <class T>
+std::unique_ptr<T> to_unique_ptr(T* t) {
+  return std::unique_ptr<T>(t);
+}
+
+inline
+void
+async_tm_prep(ServerInterface* si, CallbackBase* callback) {
+  si->setEventBase(callback->getEventBase());
+  si->setThreadManager(callback->getThreadManager());
+  si->setConnectionContext(callback->getConnectionContext());
+}
+
+template <class F>
+void
+async_tm_oneway(ServerInterface* si, CallbackBasePtr callback, F&& f) {
+  async_tm_prep(si, callback.get());
+  swallowing(std::forward<F>(f));
+}
+
+template <class F>
+void
+async_tm(ServerInterface* si, CallbackPtr<F> callback, F&& f) {
+  async_tm_prep(si, callback.get());
+  auto fut = future_catching(std::forward<F>(f));
+  auto callbackp = callback.release();
+  fut.then([=](folly::Try<fut_ret<F>>&& _return) {
+      callbackp->completeInThread(std::move(_return));
+  });
+}
+
+template <class F>
+void
+async_eb_oneway(ServerInterface* si, CallbackBasePtr callback, F&& f) {
+  auto callbackp = callback.release();
+  auto fm = folly::makeMoveWrapper(std::move(f));
+  callbackp->runFuncInQueue([=]() mutable {
+      async_tm_oneway(si, to_unique_ptr(callbackp), fm.move());
+  });
+}
+
+template <class F>
+void
+async_eb(ServerInterface* si, CallbackPtr<F> callback, F&& f) {
+  auto callbackp = callback.release();
+  auto fm = folly::makeMoveWrapper(std::move(f));
+  callbackp->runFuncInQueue([=]() mutable {
+      async_tm(si, to_unique_ptr(callbackp), fm.move());
+  });
+}
+
+}} // detail::si
 
 }} // apache::thrift

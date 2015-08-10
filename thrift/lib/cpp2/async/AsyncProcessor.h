@@ -30,7 +30,8 @@
 #include <thrift/lib/cpp2/Thrift.h>
 #include <folly/String.h>
 #include <folly/MoveWrapper.h>
-#include <folly/wangle/rx/Observer.h>
+#include <folly/futures/Future.h>
+#include <wangle/deprecated/rx/Observer.h>
 
 namespace apache { namespace thrift {
 
@@ -122,6 +123,17 @@ class AsyncProcessor : public TProcessorBase {
 class GeneratedAsyncProcessor : public AsyncProcessor {
  public:
   ~GeneratedAsyncProcessor() override {}
+
+  template <typename Derived, typename ProtocolReader>
+  using ProcessFunc = void(Derived::*)(
+      std::unique_ptr<apache::thrift::ResponseChannel::Request>,
+      std::unique_ptr<folly::IOBuf>,
+      std::unique_ptr<ProtocolReader> iprot,
+      apache::thrift::Cpp2RequestContext* context,
+      apache::thrift::async::TEventBase* eb,
+      apache::thrift::concurrency::ThreadManager* tm);
+  template <typename ProcessFunc>
+  using ProcessMap = std::unordered_map<std::string, ProcessFunc>;
 
  protected:
   template <typename ProtocolIn, typename Args>
@@ -474,8 +486,10 @@ class HandlerCallbackBase {
     } else {
       auto req = folly::makeMoveWrapper(std::move(req_));
       auto ctx = folly::makeMoveWrapper(std::move(ctx_));
+      auto protoSeqId = protoSeqId_;
+      auto reqCtx = reqCtx_;
       getEventBase()->runInEventBaseThread([=]() mutable {
-        f(std::move(*req), protoSeqId_, ctx->get(), ex, reqCtx_);
+        f(std::move(*req), protoSeqId, ctx->get(), ex, reqCtx);
       });
     }
   }
@@ -589,6 +603,27 @@ class HandlerCallback : public HandlerCallbackBase {
     thisPtr.release()->resultInThread(r);
   }
 
+  void complete(folly::Try<T>&& r) {
+    try {
+      result(std::move(r.value()));
+    } catch (...) {
+      exception(std::current_exception());
+    }
+  }
+  void completeInThread(folly::Try<T>&& r) {
+    try {
+      resultInThread(std::move(r.value()));
+    } catch (...) {
+      exceptionInThread(std::current_exception());
+    }
+  }
+  static void completeInThread(
+      std::unique_ptr<HandlerCallback> thisPtr,
+      folly::Try<T>&& r) {
+    DCHECK(thisPtr);
+    thisPtr.release()->completeInThread(std::forward<folly::Try<T>>(r));
+  }
+
  protected:
 
   virtual void doResult(const ResultType& r) {
@@ -643,6 +678,30 @@ class HandlerCallback<void> : public HandlerCallbackBase {
       std::unique_ptr<HandlerCallback> thisPtr) {
     DCHECK(thisPtr);
     thisPtr.release()->doneInThread();
+  }
+
+  void complete(folly::Try<folly::Unit>&& r) {
+    try {
+      r.throwIfFailed();
+      done();
+    } catch (...) {
+      exception(std::current_exception());
+    }
+  }
+  void completeInThread(folly::Try<folly::Unit>&& r) {
+    try {
+      r.throwIfFailed();
+      doneInThread();
+    } catch (...) {
+      exceptionInThread(std::current_exception());
+    }
+  }
+  static void completeInThread(
+      std::unique_ptr<HandlerCallback> thisPtr,
+      folly::Try<folly::Unit>&& r) {
+    DCHECK(thisPtr);
+    thisPtr.release()->completeInThread(
+        std::forward<folly::Try<folly::Unit>>(r));
   }
 
  protected:
@@ -801,7 +860,7 @@ class ServerInterface : public AsyncProcessorFactory {
    * will be NULL for async calls.
    */
   static __thread Cpp2RequestContext* reqCtx_;
-  apache::thrift::concurrency::ThreadManager* tm_;
+  static __thread apache::thrift::concurrency::ThreadManager* tm_;
   static __thread apache::thrift::async::TEventBase* eb_;
 };
 

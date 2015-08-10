@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cassert>
 #include <string>
 #include <fstream>
 #include <iostream>
@@ -76,6 +77,9 @@ class t_py_generator : public t_generator {
     } else {
       default_port_ = "9090";
     }
+
+    iter = parsed_options.find("compare_t_fields_only");
+    compare_t_fields_only_ = (iter != parsed_options.end());
 
     out_dir_base_ = "gen-py";
 
@@ -301,6 +305,11 @@ class t_py_generator : public t_generator {
    * True iff we serialize maps in the ascending order of ther keys
    */
   bool sort_keys_;
+
+  /**
+   * True iff we compare thrift classes using their spec fields only
+   */
+  bool compare_t_fields_only_;
 
   /**
    * Default port to use.
@@ -698,10 +707,11 @@ void t_py_generator::init_generator() {
   // Make output directory
   string module = get_real_py_module(program_);
   package_dir_ = get_out_dir();
+  assert(package_dir_.back() == '/');
   while (true) {
     // TODO: Do better error checking here.
     MKDIR(package_dir_.c_str());
-    std::ofstream init_py((package_dir_+"/__init__.py").c_str());
+    std::ofstream init_py((package_dir_+"__init__.py").c_str());
     init_py << py_autogen_comment();
     init_py.close();
     if (module.empty()) {
@@ -709,26 +719,26 @@ void t_py_generator::init_generator() {
     }
     string::size_type pos = module.find('.');
     if (pos == string::npos) {
-      package_dir_ += "/";
       package_dir_ += module;
+      package_dir_ += "/";
       module.clear();
     } else {
-      package_dir_ += "/";
       package_dir_ += module.substr(0, pos);
+      package_dir_ += "/";
       module.erase(0, pos+1);
     }
   }
 
   // Make output file
-  string f_types_name = package_dir_+"/"+"ttypes.py";
+  string f_types_name = package_dir_+"ttypes.py";
   f_types_.open(f_types_name.c_str());
   record_genfile(f_types_name);
 
-  string f_consts_name = package_dir_+"/"+"constants.py";
+  string f_consts_name = package_dir_+"constants.py";
   f_consts_.open(f_consts_name.c_str());
   record_genfile(f_consts_name);
 
-  string f_init_name = package_dir_+"/__init__.py";
+  string f_init_name = package_dir_+"__init__.py";
   ofstream f_init;
   f_init.open(f_init_name.c_str());
   record_genfile(f_init_name);
@@ -863,7 +873,12 @@ string t_py_generator::py_imports() {
   imports += "import six\n";
   imports += "from thrift.util.Recursive import fix_spec\n";
   imports += "from thrift.Thrift import *\n";
-  imports += "from thrift.protocol.TProtocol import TProtocolException\n\n";
+  imports += "from thrift.protocol.TProtocol import TProtocolException\n";
+  if (compare_t_fields_only_) {
+    imports += "from thrift.util import parse_struct_spec\n\n";
+  } else {
+    imports += "\n";
+  }
 
   if (gen_json_) {
     imports += "from json import loads\n";
@@ -989,7 +1004,7 @@ string t_py_generator::render_const_value(t_type* type, t_const_value* value) {
   } else if (type->is_enum()) {
     indent(out) << value->get_integer();
   } else if (type->is_struct() || type->is_xception()) {
-    out << rename_reserved_keywords(type->get_name()) << "(**{" << endl;
+    out << rename_reserved_keywords(type_name(type)) << "(**{" << endl;
     indent_up();
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
@@ -1287,8 +1302,23 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
     indent() << "def __eq__(self, other):" << endl;
   indent_up();
   out <<
-    indent() << "return isinstance(other, self.__class__) and "
-                "self.__dict__ == other.__dict__" << endl;
+    indent() << "if not isinstance(other, self.__class__):" << endl;
+  indent_up();
+  out <<
+    indent() << "return False" << endl;
+  indent_down();
+  out << endl;
+  if (compare_t_fields_only_) {
+    out <<
+      indent() << "return "
+        << "self.field == other.field and "
+        << "self.value == other.value" << endl;
+  } else {
+    out <<
+      indent() << "return "
+        << "self.__dict__ == other.__dict__" << endl;
+  }
+
   indent_down();
   out << endl;
 
@@ -1572,9 +1602,21 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
     out <<
       indent() << "def __eq__(self, other):" << endl;
     indent_up();
-    out <<
-      indent() << "return isinstance(other, self.__class__) and "
-      "self.__dict__ == other.__dict__" << endl;
+    out << indent() << "if not isinstance(other, self.__class__):" << endl;
+    indent_up();
+    out << indent() << "return False" << endl;
+    indent_down();
+    out << endl;
+    if (compare_t_fields_only_) {
+      out << indent() << "spec_t_fields = parse_struct_spec(self)" << endl;
+      out << indent() << "return "
+          << "all(getattr(self, field.name, field.default) "
+          << "== getattr(other, field.name, field.default)"
+          << " for field in spec_t_fields)" << endl;
+    } else {
+      out << indent() << "return "
+          << "self.__dict__ == other.__dict__ " << endl;
+    }
     indent_down();
     out << endl;
 
@@ -1905,7 +1947,7 @@ void t_py_generator::generate_py_struct_writer(ofstream& out,
  * @param tservice The service definition
  */
 void t_py_generator::generate_service(t_service* tservice) {
-  string f_service_name = package_dir_+"/"+
+  string f_service_name = package_dir_+
     rename_reserved_keywords(service_name_)+".py";
   f_service_.open(f_service_name.c_str());
   record_genfile(f_service_name);
@@ -2422,7 +2464,7 @@ void t_py_generator::generate_service_client(t_service* tservice) {
  * @param tservice The service to generate a remote for.
  */
 void t_py_generator::generate_service_remote(t_service* tservice) {
-  string f_remote_name = package_dir_+"/"+service_name_+"-remote";
+  string f_remote_name = package_dir_+service_name_+"-remote";
   ofstream f_remote;
   f_remote.open(f_remote_name.c_str());
   record_genfile(f_remote_name);
@@ -2531,7 +2573,7 @@ void t_py_generator::generate_service_remote(t_service* tservice) {
  * @param tservice The service to generate a fuzzer for.
  */
 void t_py_generator::generate_service_fuzzer(t_service* tservice) {
-  string f_fuzzer_name = package_dir_+"/"+service_name_+"-fuzzer";
+  string f_fuzzer_name = package_dir_+service_name_+"-fuzzer";
   ofstream f_fuzzer;
   f_fuzzer.open(f_fuzzer_name.c_str());
   record_genfile(f_fuzzer_name);

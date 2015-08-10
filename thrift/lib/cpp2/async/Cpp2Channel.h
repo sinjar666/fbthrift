@@ -27,9 +27,9 @@
 #include <thrift/lib/cpp/async/TEventBase.h>
 #include <thrift/lib/cpp/transport/THeader.h>
 #include <folly/io/IOBufQueue.h>
-#include <folly/wangle/channel/Handler.h>
-#include <folly/wangle/channel/StaticPipeline.h>
-#include <folly/wangle/channel/OutputBufferingHandler.h>
+#include <wangle/channel/Handler.h>
+#include <wangle/channel/StaticPipeline.h>
+#include <wangle/channel/OutputBufferingHandler.h>
 #include <thrift/lib/cpp2/async/FramingHandler.h>
 #include <thrift/lib/cpp2/async/ProtectionHandler.h>
 #include <memory>
@@ -81,7 +81,7 @@ class Cpp2Channel
   void read(Context* ctx, folly::IOBufQueue& q) override;
   void readEOF(Context* ctx) override;
   void readException(Context* ctx, folly::exception_wrapper e) override;
-  folly::Future<void> close(Context* ctx) override;
+  folly::Future<folly::Unit> close(Context* ctx) override;
 
   void writeSuccess() noexcept;
   void writeError(size_t bytesWritten,
@@ -120,7 +120,7 @@ class Cpp2Channel
 private:
   std::shared_ptr<apache::thrift::async::TAsyncTransport> transport_;
   std::unique_ptr<folly::IOBufQueue> queue_;
-  std::deque<std::vector<SendCallback*>> sendCallbacks_;
+  std::deque<SendCallback*> sendCallbacks_;
 
   RecvCallback* recvCallback_;
   bool eofInvoked_;

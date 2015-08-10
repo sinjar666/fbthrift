@@ -60,6 +60,11 @@ class OrderedDict(dict):
 def _map_get(map, key, default=None):
     return map[key] if key in map else default
 
+def _lift_unit(typ):
+    if typ == 'void':
+        return 'folly::Unit'
+    return typ
+
 # ---------------------------------------------------------------
 # Generator
 # ---------------------------------------------------------------
@@ -95,6 +100,7 @@ class CppGenerator(t_generator.Generator):
         'implicit_templates' : 'templates are instantiated implicitly' +
                                'instead of explicitly',
         'separate_processmap': "generate processmap in separate files",
+        'optionals': "produce folly::Optional<...> for optional members",
     }
     _out_dir_base = 'gen-cpp2'
     _compatibility_dir_base = 'gen-cpp'
@@ -271,8 +277,12 @@ class CppGenerator(t_generator.Generator):
     def _is_reference(self, f):
         return self._has_cpp_annotation(f, "ref")
 
+    def _is_optional_wrapped(self, f):
+        return f.req == e_req.optional and self.flag_optionals
+
     def _has_isset(self, f):
-        return not self._is_reference(f) and f.req != e_req.required
+        return not self._is_reference(f) and f.req != e_req.required \
+            and not self._is_optional_wrapped(f)
 
     # noncopyable is a hack to support gcc < 4.8, where declaring a constructor
     # as defaulted tries to generate it, even though it should be deleted.
@@ -459,6 +469,8 @@ class CppGenerator(t_generator.Generator):
             minName = sortedConstants[0].name
             maxName = sortedConstants[-1].name
 
+        self._generate_hash_equal_to(tenum)
+
         with self._types_global.namespace('apache.thrift').scope:
 
             with out().defn('template <> const char* TEnumTraitsBase<{fullName}>::'
@@ -492,7 +504,7 @@ class CppGenerator(t_generator.Generator):
         self._types_scope(txt)
 
     def _declare_field(self, field, pointer=False, constant=False,
-                        reference=False, unique=False):
+                        reference=False, unique=False, optional_wrapped=False):
         # I removed the 'init' argument, as all inits happen in default
         # constructor
         result = ''
@@ -505,6 +517,8 @@ class CppGenerator(t_generator.Generator):
             result += '&'
         if unique:
             result = "std::unique_ptr<" + result + ">"
+        if optional_wrapped:
+            result = "folly::Optional<" + result + ">"
         result += ' ' + field.name
         if not reference:
             result += ';'
@@ -873,7 +887,8 @@ class CppGenerator(t_generator.Generator):
                    not self._is_stream_type(function.returntype):
                     with out().defn(
                             self._get_process_function_signature(service,
-                                                                 function),
+                                                                 function,
+                                                                 True),
                             name=function.name,
                             modifiers='virtual'):
                         if not function.oneway and \
@@ -940,80 +955,52 @@ class CppGenerator(t_generator.Generator):
                         ' {name}()',
                         name='getProcessor',
                         modifiers='virtual'):
-                out('return std::unique_ptr<' +
-                  'apache::thrift::AsyncProcessor>(' +
-                  'new {0}AsyncProcessor(({0}SvIf*)this));'.format(
-                          service.name))
+                out('return folly::make_unique<{klass}AsyncProcessor>(this);'
+                    .format(klass=service.name))
             for function in service.functions:
                 if not self._is_stream_type(function.returntype):
                     with out().defn(self._get_process_function_signature(service,
-                                                                     function),
+                                                                     function,
+                                                                     True),
                                 name=function.name,
                                 modifiers='virtual'):
                         out('throw apache::thrift::TApplicationException('
                           '"Function {0} is unimplemented");'
                           .format(function.name))
-                        if not function.oneway and \
-                          not function.returntype.is_void and \
-                          not self._is_complex_type(function.returntype):
-                            out('return ' +
-                              self._default_value(function.returntype) + ';')
                     self._generate_server_future_function(service, function)
                 self._generate_server_async_function(service, function)
 
     def _generate_server_future_function(self, service, function):
-        with out().defn(self._get_process_function_signature_future(service,
-                                                                    function),
-                    name="future_" + function.name):
+        name = "future_" + function.name
+        sig = self._get_process_function_signature_future(service, function)
+        with out().defn(sig, name=name):
             rettype = self._type_name(function.returntype)
-            if self._is_complex_type(function.returntype) and \
-                    not self.flag_stack_arguments:
-                rettype = 'std::unique_ptr<' + rettype + '>'
-
-            promise_name = self.tmp("promise")
-            out("folly::Promise<{0}> {1};".format(rettype, promise_name))
-            args = []
-            for member in function.arglist.members:
-                if self._is_complex_type(member.type) \
-                  and not self.flag_stack_arguments:
-                    args.append("std::move({0})".format(member.name))
+            if self.flag_stack_arguments:
+                args = [m.name for m in function.arglist.members]
+                if not self._is_complex_type(function.returntype):
+                    f = "future"
+                    c = "[&] {{ return {n}({a}); }}"
                 else:
-                    args.append(member.name)
-
-            if not function.oneway and self._is_complex_type(
-                function.returntype
-            ):
-                if self.flag_stack_arguments:
-                    args.insert(0, "_return")
+                    f = "future_returning"
+                    args = ["_return"] + args
+                    c = "[&]({r}& _return) {{ {n}({a}); }}"
+            else:
+                mv = lambda n: "std::move({n})".format(n=n)
+                args = [
+                    mv(m.name) if self._is_complex_type(m.type) else m.name
+                    for m in function.arglist.members
+                ]
+                if not self._is_complex_type(function.returntype):
+                    f = "future"
+                    c = "[&] {{ return {n}({a}); }}"
                 else:
-                    args.insert(0, "*_return")
-            with out("try"):
-                if not function.oneway and not function.returntype.is_void:
-                    if self._is_complex_type(function.returntype) \
-                      and not self.flag_stack_arguments:
-                        out("std::unique_ptr<{0}> _return(new {0});"
-                          .format(self._type_name(function.returntype)))
-                        out("{0}({1});".format(function.name,
-                                             ", ".join(args)))
-                        out("{0}.setValue(std::move(_return));".format(
-                            promise_name))
-                    elif self._is_complex_type(function.returntype):
-                        out("{0} _return;".format(self._type_name(
-                            function.returntype)))
-                        out("{0}({1});".format(function.name,
-                                             ", ".join(args)))
-                        out("{0}.setValue(_return);".format(promise_name))
-                    else:
-                        out("{0}.setValue({1}({2}));"
-                          .format(promise_name, function.name, ", ".join(args)))
-                else:
-                    out("{0}(".format(function.name) + ", ".join(args) + ");")
-                    out("{0}.setValue();".format(promise_name))
-                with out().catch("const std::exception& ex"):
-                    out("{0}.setException(folly::exception_wrapper"
-                        "(std::current_exception()));".format(
-                            promise_name))
-            out("return {0}.getFuture();".format(promise_name))
+                    f = "future_returning_uptr"
+                    args = ["_return"] + args
+                    c = "[&]({r}& _return) {{ {n}({a}); }}"
+            s = "return {ns}::{f}(" + c + ");"
+            ns = "apache::thrift::detail::si"
+            r = self._type_name(function.returntype)
+            out(s.format(ns=ns, f=f, n=function.name, r=r, a=", ".join(args)))
 
     def _generate_server_async_function_streaming(self, function):
         out('callback->exception(folly::make_exception_wrapper<'
@@ -1022,83 +1009,28 @@ class CppGenerator(t_generator.Generator):
 
     def _generate_server_async_function_future(self, function):
         if self._is_stream_type(function.returntype):
-            self._generate_server_async_function_streaming(function)
-            return
-        out('auto callbackp = callback.release();')
-        out('setEventBase(callbackp->getEventBase());')
-        out('setThreadManager(callbackp->getThreadManager());')
-        captureArgs = []
-        callArgs = []
-        for member in function.arglist.members:
-            if self._is_complex_type(member.type):
-                tmpMovedArg = self.tmp("tmp_move_{0}".format(member.name))
-                out("auto {0} = std::move({1});"
-                        .format(tmpMovedArg, member.name))
-                moveArg = self.tmp("move_{0}".format(member.name))
-                out("auto {0} = folly::makeMoveWrapper(std::move({1}));"
-                        .format(moveArg, tmpMovedArg))
-                captureArgs.append(moveArg)
-                callArgs.append("std::move(*{0})".format(moveArg))
-            else:
-                captureArgs.append(member.name)
-                callArgs.append(member.name)
-
+            return self._generate_server_async_function_streaming(function)
+        stack_args = self.flag_stack_arguments
+        is_complex_type = lambda t: self._is_complex_type(t) and not stack_args
         if self._is_processed_in_eb(function):
-            captures = "this, callbackp"
-            if captureArgs:
-                captures = "{0}, {1}".format(captures, ", ".join(captureArgs))
-            with out("callbackp->runFuncInQueue([{0}]() mutable".format(captures)):
-                self._generate_server_async_future_stuff(function, callArgs)
-            out(");")
+            for arg in function.arglist.members:
+                if is_complex_type(arg.type):
+                    out("auto {n}_ = folly::makeMoveWrapper({n});"
+                        .format(n=arg.name))
+            f = "async_eb_oneway" if function.oneway else "async_eb"
+            mv = lambda n: "{n}_.move()".format(n=n)
+            c = "[=]() mutable {{ return future_{n}({a}); }}"
         else:
-            self._generate_server_async_future_stuff(function, callArgs)
-
-    def _generate_server_async_future_stuff(self, function, callArgs):
-        rettype = "folly::Try<{0}>".format(
-            self._type_name(function.returntype))
-        if self._is_complex_type(function.returntype) and \
-          not self.flag_stack_arguments:
-            rettype = "folly::Try<std::unique_ptr" \
-              "<{0}>>".format(self._type_name(function.returntype))
-        future_name = self.tmp('future')
-        out('setConnectionContext(callbackp->getConnectionContext());')
-        with out("try"):
-            if not function.oneway and \
-              not function.returntype.is_void:
-                out("auto {2} = future_{0}({1});".format(
-                    function.name, ", ".join(callArgs), future_name))
-                with out("{0}.then([=]({1}&& _return)".format(
-                        future_name, rettype)):
-                    with out("try"):
-                        out("callbackp->resultInThread("
-                          "std::move(_return.value()));")
-                        with out().catch("..."):
-                            out("callbackp->exceptionInThread("
-                                "std::current_exception());")
-                out(");")
-            else:
-                out("auto {1} = future_{0}(".format(
-                    function.name, future_name)
-                    + ", ".join(callArgs) + ");")
-                if not function.oneway:
-                    with out(("{0}.then([=](folly" +
-                          "::Try<void>&& t)").format(future_name)):
-                        with out("try"):
-                            out("t.throwIfFailed();")
-                            out("callbackp->doneInThread();")
-                            with out().catch("..."):
-                                out("callbackp->exceptionInThread("
-                                    "std::current_exception());")
-                    out(");")
-                else:
-                    out("delete callbackp;")
-            with out().catch("const std::exception& ex"):
-                if not function.oneway:
-                    out("callbackp->exceptionInThread(std::"
-                        "current_exception());")
-                else:
-                    out("delete callbackp;")
-
+            f = "async_tm_oneway" if function.oneway else "async_tm"
+            mv = lambda n: "std::move({n})".format(n=n)
+            c = "[&] {{ return future_{n}({a}); }}"
+        s = "{ns}::{f}(this, std::move(callback), " + c + ");"
+        args = [
+            mv(m.name) if is_complex_type(m.type) else m.name
+            for m in function.arglist.members
+        ]
+        ns = "apache::thrift::detail::si"
+        out(s.format(ns=ns, f=f, n=function.name, a=", ".join(args)))
 
     def _generate_server_async_function(self, service, function):
         with out().defn(self._get_process_function_signature_async(service,
@@ -1126,25 +1058,28 @@ class CppGenerator(t_generator.Generator):
                 not self.flag_stack_arguments:
             rettype = 'std::unique_ptr<' + rettype + '>'
         sig = 'folly::Future<' + \
-            rettype + '> {name}('
+            _lift_unit(rettype) + '> {name}('
 
         sig += self._argument_list(function.arglist, False, unique=True)
         sig += ')'
         return sig
 
-    def _get_process_function_signature(self, service, function):
+    def _get_process_function_signature(self, service, function,
+                                        no_param_names=False):
         addcomma = False
         if not function.oneway:
             if self._is_complex_type(function.returntype):
-                sig = 'void {name}' + '({0}& _return'.format(
-                    self._type_name(function.returntype))
+                sig = 'void {name}' + '({0}& {1}'.format(
+                    self._type_name(function.returntype),
+                    '/*_return*/' if no_param_names else '_return')
                 addcomma = True
             else:
                 sig = self._type_name(function.returntype)
                 sig += ' {name}('
         else:
             sig = 'void {name}('
-        sig += self._argument_list(function.arglist, addcomma, unique=True)
+        sig += self._argument_list(function.arglist, addcomma, unique=True,
+                                   no_param_names=no_param_names)
         sig += ')'
         return sig
 
@@ -1286,6 +1221,10 @@ class CppGenerator(t_generator.Generator):
                         modifiers='virtual'):
                 out("return \"{0}\";".format(service.name))
 
+            base_of = lambda n: "{}AsyncProcessor".format(self._type_name(n))
+            base = base_of(service.extends) if service.extends else "void"
+            out('using BaseAsyncProcessor = {};'.format(base))
+
             out().label('protected:')
 
             out('{0}SvIf* iface_;'.format(service.name))
@@ -1294,180 +1233,36 @@ class CppGenerator(t_generator.Generator):
                         'apache::thrift::protocol::PROTOCOL_TYPES protType)',
                         name='getCacheKey',
                         modifiers='virtual'):
-                out('std::string fname;')
-                out('apache::thrift::MessageType mtype;')
-                out('int32_t protoSeqId = 0;')
-                out('std::string pname;')
-                out('apache::thrift::protocol::TType ftype;')
-                out('int16_t fid;')
-                with out('try'):
-                    switch = out('switch(protType)').scope
-                    for shortprot, protname, prottype in self.protocols:
-                        with switch.case('apache::thrift::protocol::' +
-                                prottype, nobreak=True):
-                            out(('std::unique_ptr<apache::thrift::' +
-                                '{0}Reader> ' +
-                                'iprot(new apache::thrift::' +
-                                '{0}Reader());').format(protname))
-                            out('iprot->setInput(buf);')
-                            out('iprot->readMessageBegin(fname, mtype,' +
-                                  ' protoSeqId);')
-                            out('auto pfn = CacheKeyMap.find(fname);')
-                            with out('if (pfn == CacheKeyMap.end())'):
-                                out('return folly::none;')
-                            out('auto cacheKeyParamId = pfn->second;')
+                out('return apache::thrift::detail::ap::get_cache_key(' +
+                    'buf, protType, cacheKeyMap_);')
 
-                            out('uint32_t xfer = 0;')
-                            out('xfer += iprot->readStructBegin(pname);')
-
-                            whileLoop = out('while(true)').scope
-                            with whileLoop:
-                                out('xfer += iprot->readFieldBegin(pname, ' +
-                                        'ftype, fid);')
-                                stop = out('if (ftype == apache::thrift::' +
-                                        'protocol::T_STOP)').scope
-                                with stop:
-                                    out('break;')
-                                stop.release()
-
-                                isMatch = out('if (fid == ' +
-                                        'cacheKeyParamId)').scope
-                                with isMatch:
-                                    out('std::string cacheKey;')
-                                    out('iprot->readString(cacheKey);')
-                                    out('return folly::Optional<std::' +
-                                            'string>(std::move(cacheKey));')
-
-                                isMatch.release()
-                                out('xfer += iprot->skip(ftype);')
-                                out('xfer += iprot->readFieldEnd();')
-                            whileLoop.release()
-                            out('return folly::none;')
-
-                    with switch.case('default'):
-                        out('return folly::none;')
-                    switch.release()
-
-                    with out().catch('const std::exception& e'):
-                        out('LOG(ERROR) << \"Caught an exception ' +
-                                'parsing buffer:\" << e.what();')
-                        out('return folly::none;')
-
-                out('return folly::none;')
-                # end of getCacheKey
+            out().label('public:')
 
             with out().defn('void {name}(std::unique_ptr<' +
                         'apache::thrift::ResponseChannel::Request> req, ' +
                         'std::unique_ptr<folly::IOBuf> buf, ' +
-                        'apache::thrift::protocol::PROTOCOL_TYPES protType,' +
-                        'apache::thrift::Cpp2RequestContext* context,' +
+                        'apache::thrift::protocol::PROTOCOL_TYPES protType, ' +
+                        'apache::thrift::Cpp2RequestContext* context, ' +
                         'apache::thrift::async::TEventBase* eb, ' +
                         'apache::thrift::concurrency::ThreadManager* tm)',
                         name='process',
                         modifiers='virtual'):
-                out('std::string fname;')
-                out('apache::thrift::MessageType mtype;')
-                out('int32_t protoSeqId = 0;')
-                switch = out('switch(protType)').scope
-                for shortprot, protname, prottype in self.protocols:
-                    if shortprot == 'simple_json':
-                        continue
-                    with switch.case('apache::thrift::protocol::' +
-                                     prottype, nobreak=True):
-                        out(('std::unique_ptr<apache::thrift::' +
-                           '{0}Reader> ' +
-                           'iprot(new apache::thrift::' +
-                           '{0}Reader());').format(protname))
-                        out('iprot->setInput(buf.get());')
-                        with out('try'):
-                            out('iprot->readMessageBegin(fname, mtype,' + \
-                                  ' protoSeqId);')
-                            with out().catch('const apache::thrift::'
-                                             'TException& ex'):
-                                out('LOG(ERROR) << "received invalid message' +
-                                  ' from client: " << ex.what();')
-                                out('apache::thrift::{0}Writer prot;'
-                                  .format(protname))
-                                self._generate_app_ex(
-                                    service, '"invalid message from client"',
-                                    "process", "protoSeqId", False, out(),
-                                    'context', False)
-                                out('return;')
-                        with out('if (mtype != apache::thrift::T_CALL && ' +
-                               'mtype != apache::thrift::T_ONEWAY)'):
-                            out('LOG(ERROR) << "received invalid message of ' +
-                              'type " << mtype;')
-                            out('apache::thrift::{0}Writer prot;'
-                              .format(protname))
-                            self._generate_app_ex(
-                                service, '"invalid message arguments"',
-                                "process", "protoSeqId", False, out(),
-                                'context', False)
-                        out('auto pfn = {0}ProcessMap_.find(fname);'.format(
-                                shortprot))
-                        with out('if (pfn == {0}ProcessMap_.end())'.format(
-                                shortprot)):
-                            if not service.extends:
-                                out('const std::string exMsg = ' +
-                                  'folly::stringPrintf(' +
-                                  ' "Method name %s not found",' +
-                                  ' fname.c_str());')
-                                out('apache::thrift::{0}Writer prot;'
-                                  .format(protname))
-                                self._generate_app_ex(
-                                    service, 'exMsg',
-                                    "process", "protoSeqId", False, out(),
-                                    'context', False)
-                            else:
-                                out(self._type_name(service.extends) +
-                                  'AsyncProcessor::process(std::move(req), ' +
-                                  'std::move(buf), protType, context, eb, tm);')
-                            out('return;')
-                        out('(this->*(pfn->second))(std::move(req), ' +
-                          'std::move(buf), std::move(iprot), context, eb, tm);')
-                        out('return;')
-                with switch.case('default'):
-                    out('LOG(ERROR) << "invalid protType: " << protType;')
-                    out('return;')
-                switch.release()
+                out('apache::thrift::detail::ap::process(' +
+                    'this, std::move(req), std::move(buf), protType, ' +
+                    'context, eb, tm);')
+
+            out().label('protected:')
 
             with out().defn('bool {name}(const folly::IOBuf* buf, ' +
                     'const apache::thrift::transport::THeader* header)',
                         name='isOnewayMethod',
                         modifiers='virtual'):
-                out('std::string fname;')
-                out('apache::thrift::MessageType mtype;')
-                out('int32_t protoSeqId = 0;')
-                out('apache::thrift::protocol::PROTOCOL_TYPES protType = ' +
-                  'static_cast<apache::thrift::protocol::PROTOCOL_TYPES>' +
-                  '(header->getProtocolId());')
-                switch = out('switch(protType)').scope
-                for shortprot, protname, prottype in self.protocols:
-                    if shortprot == 'simple_json':
-                        continue
-                    with switch.case('apache::thrift::protocol::' +
-                                     prottype, nobreak=True):
-                        out(('apache::thrift::{0}Reader iprot;')
-                                .format(protname))
-                        out('iprot.setInput(buf);')
-                        with out('try'):
-                            out('iprot.readMessageBegin(fname, mtype,' +
-                                  ' protoSeqId);')
-                            out('auto it = onewayMethods.find(fname);')
-                            out('return it != onewayMethods.end();')
-                            with out().catch('const apache::thrift::'
-                                             'TException& ex'):
-                                out('LOG(ERROR) << "received invalid message' +
-                                  ' from client: " << ex.what();')
-                                out('return false;')
-                with switch.case('default'):
-                    out('LOG(ERROR) << "invalid protType: " << protType;')
-                switch.release()
-                out('return false;')
+                out('return apache::thrift::detail::ap::is_oneway_method(' +
+                    'buf, header, onewayMethods_);')
 
             out().label('private:')
             oneways = out().defn('std::unordered_set<std::string> {name}',
-                                 name='onewayMethods',
+                                 name='onewayMethods_',
                                  modifiers='static')
             oneways.epilogue = ';\n'
             with oneways:
@@ -1475,7 +1270,7 @@ class CppGenerator(t_generator.Generator):
                         for function in service.functions if function.oneway))
             cache_map_type = 'std::unordered_map<std::string, int16_t>'
             cache_map = out().defn(cache_map_type + ' {name}',
-                    name='CacheKeyMap',
+                    name='cacheKeyMap_',
                     modifiers='static')
             cache_map.epilogue = ';'
 
@@ -1495,22 +1290,23 @@ class CppGenerator(t_generator.Generator):
             for shortprot, protname, prottype in self.protocols:
                 if shortprot == 'simple_json':
                     continue
-                out(('typedef void ({0}::*{1}ProcessFunction)(std::unique_ptr' +
-                   '<apache::thrift::ResponseChannel::Request> req, ').format(
-                           service.name + "AsyncProcessor", shortprot) +
-                  'std::unique_ptr<folly::IOBuf> buf, ' +
-                  'std::unique_ptr<apache::thrift::{0}Reader> iprot, '.format(
-                          protname) +
-                  'apache::thrift::Cpp2RequestContext* context, ' +
-                  'apache::thrift::async::TEventBase* eb, ' +
-                  'apache::thrift::concurrency::ThreadManager* tm' + ');')
-                out('typedef std::unordered_map<std::string, ' +
-                  '{0}ProcessFunction>'.format(shortprot) +
-                  ' {0}ProcessMap;'.format(shortprot))
-                map_type = '{0}::{1}ProcessMap'.format(
-                    service.name + "AsyncProcessor",
-                    shortprot)
+                out().label('public:')
+                out((
+                    'using {proto}ProcessFunc = ' +
+                    'ProcessFunc<{klass}AsyncProcessor, ' +
+                    'apache::thrift::{proto}Reader>;')
+                    .format(proto=protname, klass=service.name))
+                out('using {proto}ProcessMap = ProcessMap<{proto}ProcessFunc>;'
+                    .format(proto=protname))
+                map_type = '{klass}AsyncProcessor::{proto}ProcessMap' \
+                    .format(proto=protname, klass=service.name)
                 map_name = '{0}ProcessMap_'.format(shortprot)
+                with out().defn('const ' + map_type + '& {name}()',
+                                name='get{proto}ProcessMap'
+                                    .format(proto=protname),
+                                modifiers='static'):
+                    out('return {proto}ProcessMap_;'.format(proto=shortprot))
+                out().label('private:')
                 process_map = out().defn(map_type + ' {name}',
                                          name=map_name,
                                          modifiers='static')
@@ -1527,22 +1323,25 @@ class CppGenerator(t_generator.Generator):
                         '<apache::thrift::{0}Reader, '
                         'apache::thrift::{0}Writer>}}'.format(protname)
                             for function in service.functions))
+
+            out().label('private:')
             for function in service.functions:
                 loadname = '"{0}.{1}"'.format(service.name, function.name)
                 if not self._is_processed_in_eb(function):
-                    with out().defn('template <typename ProtocolIn_, '
-                                'typename ProtocolOut_>\n'
-                                'void {name}(std::unique_ptr<'
-                                'apache::thrift::ResponseChannel::Request> req,'
-                                ' std::unique_ptr<folly::IOBuf> buf, '
-                                'std::unique_ptr<ProtocolIn_> iprot, '
-                                'apache::thrift::Cpp2RequestContext* ctx, '
-                                'apache::thrift::async::TEventBase* eb, '
-                                'apache::thrift::concurrency::ThreadManager* tm'
-                                ')',
-                                name="_processInThread_{0}"
+                    with out().defn(
+                            'template <typename ProtocolIn_, '
+                            'typename ProtocolOut_>\n'
+                            'void {name}(std::unique_ptr<'
+                            'apache::thrift::ResponseChannel::Request> req, '
+                            'std::unique_ptr<folly::IOBuf> buf, '
+                            'std::unique_ptr<ProtocolIn_> iprot, '
+                            'apache::thrift::Cpp2RequestContext* ctx, '
+                            'apache::thrift::async::TEventBase* eb, '
+                            'apache::thrift::concurrency::ThreadManager* tm'
+                            ')',
+                            name="_processInThread_{0}"
                                 .format(function.name),
-                                output=self._out_tcc):
+                            output=self._out_tcc):
                         out('auto pri = iface_->getRequestPriority(ctx, '
                             'apache::thrift::concurrency::{0});'.format(
                                 self._get_function_priority(service, function)))
@@ -1849,7 +1648,7 @@ class CppGenerator(t_generator.Generator):
                 return_type = self._type_name(function.returntype)
 
                 out("folly::Promise<{type}> {promise};"
-                  .format(type=return_type, promise=promise_name))
+                  .format(type=_lift_unit(return_type), promise=promise_name))
 
                 future_name = self.tmp("future")
                 out("auto {future} = {promise}.getFuture();"
@@ -1864,7 +1663,7 @@ class CppGenerator(t_generator.Generator):
                     out("std::unique_ptr<apache::thrift::RequestCallback> "
                       "{callback}("
                       "new apache::thrift::OneWayFutureCallback("
-                      "std::move({promise})));"
+                      "std::move({promise}), channel_));"
                       .format(callback=callback,
                               promise=promise_name))
 
@@ -1874,9 +1673,9 @@ class CppGenerator(t_generator.Generator):
                     out("std::unique_ptr<apache::thrift::RequestCallback> "
                       "{callback}("
                       "new apache::thrift::FutureCallback<{type}>("
-                      "std::move({promise}), recv_wrapped_{name}));"
+                      "std::move({promise}), recv_wrapped_{name}, channel_));"
                       .format(callback=callback,
-                              type=return_type,
+                              type=_lift_unit(return_type),
                               promise=promise_name,
                               name=function.name))
 
@@ -1923,17 +1722,24 @@ class CppGenerator(t_generator.Generator):
                 out("return {subj};".format(subj=subj))
 
     def _get_streaming_function_signature(self, function, uses_rpc_options):
-        return self._get_noncallback_function_signature(function, uses_rpc_options, "folly::wangle::ObservablePtr")
+        result_type = self._type_name(function.returntype)
+        return self._get_noncallback_function_signature(
+                function,
+                uses_rpc_options,
+                "folly::wangle::ObservablePtr",
+                result_type)
 
     def _get_future_function_signature(self, function, uses_rpc_options):
-        return self._get_noncallback_function_signature(function, uses_rpc_options, "folly::Future")
+        result_type = _lift_unit(self._type_name(function.returntype))
+        return self._get_noncallback_function_signature(
+                function, uses_rpc_options, "folly::Future", result_type)
 
-    def _get_noncallback_function_signature(self, function, uses_rpc_options, ret_template):
+    def _get_noncallback_function_signature(
+            self, function, uses_rpc_options, ret_template, result_type):
         params = []
         if uses_rpc_options:
             params.append("apache::thrift::RpcOptions& rpcOptions")
 
-        result_type = self._type_name(function.returntype)
         return_type = "{0}<{1}>".format(ret_template, result_type)
 
         param_list = ", ".join(params)
@@ -2341,7 +2147,7 @@ class CppGenerator(t_generator.Generator):
     def _exception_idx(self, function, idx):
         return idx + (1 if self._function_produces_result(function) else 0)
 
-    def _argument_list(self, arglist, add_comma, unique):
+    def _argument_list(self, arglist, add_comma, unique, no_param_names=False):
         out = ""
         for field in arglist.members:
             if len(out) > 0 or add_comma:
@@ -2350,7 +2156,9 @@ class CppGenerator(t_generator.Generator):
             type_name = self._type_name(field.type,
                                         arg=True, unique=unique)
 
-            out += type_name + " " + field.name
+            field_name = "/*" + field.name + "*/" if no_param_names \
+                         else field.name
+            out += type_name + " " + field_name
 
         return out
 
@@ -2523,7 +2331,8 @@ class CppGenerator(t_generator.Generator):
         has_nonrequired_fields = any(member.req != e_req.required
                                         for member in members)
         should_generate_isset = has_nonrequired_fields and \
-            ((not pointers) or read) and not obj.is_union
+            ((not pointers) or read) and not obj.is_union \
+            and not self.flag_optionals
         struct_options = self._get_serialized_fields_options(obj)
 
         # Type enum for unions
@@ -2670,7 +2479,10 @@ class CppGenerator(t_generator.Generator):
                             t = self._get_true_type(member.type)
                             name = member.name + \
                                 self._type_access_suffix(member.type)
-                            if t.is_base_type or t.is_enum:
+                            if self._is_optional_wrapped(member):
+                                # trumps below conditions, regardless of type
+                                out(('{0}.clear();').format(name))
+                            elif t.is_base_type or t.is_enum:
                                 dval = self._member_default_value(
                                         member, explicit=True)
                                 out('{0} = {1};'.format(name, dval))
@@ -2719,7 +2531,8 @@ class CppGenerator(t_generator.Generator):
                 member,
                 pointers and not member.type.is_xception,
                 not read, False,
-                self._is_reference(member)))
+                self._is_reference(member),
+                self._is_optional_wrapped(member)))
 
         if s1 is not struct:
             s1()
@@ -2919,7 +2732,7 @@ class CppGenerator(t_generator.Generator):
                         if tfield.req != e_req.required:
                             has_nonrequired_fields = True
                         out('swap(a.{0}, b.{0});'.format(tfield.name))
-                    if has_nonrequired_fields:
+                    if should_generate_isset:
                         out('swap(a.__isset, b.__isset);')
                     if struct_options.has_serialized_fields:
                         out('swap(a.{0}, b.{0});'.format(
@@ -2933,6 +2746,8 @@ class CppGenerator(t_generator.Generator):
 
     def _generate_struct_reader(self, scope, obj,
                                 pointers=False, has_isset=True):
+        if self.flag_optionals:
+            has_isset = False
         this = 'this'
         if self.flag_compatibility:
             this = 'obj'
@@ -3010,7 +2825,6 @@ class CppGenerator(t_generator.Generator):
         s2 = fields_scope('switch (fid)').scope
         # Generate deserialization code for known cases
         for field in fields:
-
             s3 = s2.case(field.key).scope
             if ('format' in field.annotations and
                     field.annotations['format'] == 'serialized'):
@@ -3101,22 +2915,28 @@ class CppGenerator(t_generator.Generator):
         name = prefix + field.name + self._type_access_suffix(field.type) + \
                 suffix
         self._generate_deserialize_type(
-            scope, field.type, name, self._is_reference(field))
+            scope, field.type, name, self._is_reference(field),
+            self._is_optional_wrapped(field))
 
-    def _generate_deserialize_type(self, scope, otype, name, pointer=False):
+    def _generate_deserialize_type(self, scope, otype, name,
+                                   pointer=False, optional_wrapped=False):
         'Deserializes a variable of any type.'
         ttype = self._get_true_type(otype)
         s = scope
         if ttype.is_void:
             raise TypeError('CANNOT GENERATE DESERIALIZE CODE FOR void TYPE: '\
                             + name)
+
         if ttype.is_struct or ttype.is_xception:
             self._generate_deserialize_struct(
-                scope, otype, ttype.as_struct, name, pointer)
+                scope, otype, ttype.as_struct, name, pointer, optional_wrapped)
         elif ttype.is_container:
             self._generate_deserialize_container(scope, ttype.as_container,
-                                                 name)
+                                                 name, otype, optional_wrapped)
         elif ttype.is_base_type:
+            if optional_wrapped:
+                # assign a new default-constructed value into the Optional
+                s('{0} = {1}();'.format(name, self._type_name(ttype)))
             btype = ttype.as_base_type
             base = btype.base
             if base == t_base.void:
@@ -3144,7 +2964,10 @@ class CppGenerator(t_generator.Generator):
             else:
                 raise CompilerError('No C++ reader for base type ' + \
                         btype.t_base_name(base) + name)
-            txt = 'xfer += iprot->{0};'.format(txt.format(name))
+            dest = name
+            if optional_wrapped:
+                dest += ".value()"
+            txt = 'xfer += iprot->{0};'.format(txt.format(dest))
             s(txt)
         elif ttype.is_enum:
             t = self.tmp('ecast')
@@ -3155,20 +2978,27 @@ class CppGenerator(t_generator.Generator):
             raise TypeError(("DO NOT KNOW HOW TO DESERIALIZE '{0}' "
                              "TYPE {1}").format(name, self._type_name(ttype)))
 
-    def _generate_deserialize_struct(
-            self, scope, otype, struct, prefix, pointer=False):
+    def _generate_deserialize_struct(self, scope, otype, struct, prefix,
+                                     pointer=False, optional_wrapped=False):
         if pointer:
             scope("{0} = std::unique_ptr<{1}>(new {1});".format(
                 prefix, self._type_name(otype)))
             scope('xfer += ::apache::thrift::Cpp2Ops< {0}>::read('
                   'iprot, {1}.get());'.format(
                       self._type_name(otype), prefix))
+        elif optional_wrapped:
+            scope("{0} = std::move({1}());".format(
+                prefix, self._type_name(otype)))
+            scope('xfer += ::apache::thrift::Cpp2Ops< {0}>::read('
+                  'iprot, &{1}.value());'.format(
+                      self._type_name(otype), prefix))
         else:
             scope('xfer += ::apache::thrift::Cpp2Ops< {0}>::read('
                   'iprot, &{1});'.format(
                       self._type_name(otype), prefix))
 
-    def _generate_deserialize_container(self, scope, cont, prefix):
+    def _generate_deserialize_container(self, scope, cont, prefix,
+                                        otype, optional_wrapped):
         s = scope
         size = self.tmp('_size')
         ktype = self.tmp('_ktype')
@@ -3177,7 +3007,13 @@ class CppGenerator(t_generator.Generator):
         cpptype = self._cpp_type_name(cont)
         use_push = (cpptype is not None and 'list' in cpptype) \
             or self._has_cpp_annotation(cont, 'template')
-        s(prefix + '.clear();')
+
+        s('{0} = std::move({1}());'.format(prefix, self._type_name(otype)))
+        if optional_wrapped:
+            cont_ref = "{0}.value()".format(prefix)
+        else:
+            cont_ref = prefix
+
         s('uint32_t {0};'.format(size))
         # Declare variables, read header
         if cont.is_map:
@@ -3209,31 +3045,33 @@ class CppGenerator(t_generator.Generator):
             with s('for ({0} = 0; {1}; {0}++)'.format(i, peek)):
                 if cont.is_map:
                     self._generate_deserialize_map_element(
-                            out(), cont.as_map, prefix)
+                            out(), cont.as_map, cont_ref)
                 elif cont.is_set:
                     self._generate_deserialize_set_element(
-                            out(), cont.as_set, prefix)
+                            out(), cont.as_set, cont_ref)
                 elif cont.is_list:
                     if not use_push:
-                        s('{0}.resize({1} + 1);'.format(prefix, i))
+                        s('{0}.resize({1} + 1);'.format(cont_ref, i))
                     self._generate_deserialize_list_element(out(), cont.as_list,
-                                                            prefix, use_push, i)
+                                                            cont_ref, use_push,
+                                                            i)
         with s('else'):
             if cont.is_list and not use_push:
-                s('{0}.resize({1});'.format(prefix, size))
+                s('{0}.resize({1});'.format(cont_ref, size))
             elif ((cont.is_map and cont.as_map.is_unordered) or
                   (cont.is_set and cont.as_set.is_unordered)):
-                s('{0}.reserve({1});'.format(prefix, size))
+                s('{0}.reserve({1});'.format(cont_ref, size))
             with s('for ({0} = 0; {0} < {1}; ++{0})'.format(i, size)):
                 if cont.is_map:
                     self._generate_deserialize_map_element(
-                            out(), cont.as_map, prefix)
+                            out(), cont.as_map, cont_ref)
                 elif cont.is_set:
                     self._generate_deserialize_set_element(
-                            out(), cont.as_set, prefix)
+                            out(), cont.as_set, cont_ref)
                 elif cont.is_list:
                     self._generate_deserialize_list_element(out(), cont.as_list,
-                                                            prefix, use_push, i)
+                                                            cont_ref, use_push,
+                                                            i)
         # Read container end
         if cont.is_map:
             s('xfer += iprot->readMapEnd();')
@@ -3319,8 +3157,15 @@ class CppGenerator(t_generator.Generator):
 
         first = True
         for field in filter(self._should_generate_field, obj.members):
-            isset_expr = ('{0}->{1}' if self._is_reference(field)
-                          else '{0}->__isset.{1}').format(this, field.name)
+            if self._is_reference(field):
+                isset_expr_format = '{0}->{1}'
+            elif self._is_optional_wrapped(field):
+                isset_expr_format = '{0}->{1}.hasValue()'
+            else:
+                isset_expr_format = '{0}->__isset.{1}'
+
+            isset_expr = isset_expr_format.format(this, field.name)
+
             if result == True:
                 if first:
                     first = False
@@ -3329,13 +3174,13 @@ class CppGenerator(t_generator.Generator):
                     s1 = s('else if ({0})'.format(isset_expr)).scope
             elif field.req == e_req.optional:
                 s1 = s('if ({0})'.format(isset_expr)).scope
-
             elif obj.is_union:
                 s1 = s.case(obj.name + '::Type::' + field.name).scope
             elif self.flag_terse_writes and not field.req == e_req.required:
                 s1 = self._try_terse_write(field, this, s, pointers)
             else:
                 s1 = s
+
             # Add the size of field header + footer
             s1('xfer += prot_->serializedFieldSize("{0}", {1}, {2});'
                ''.format(field.name, self._type_to_enum(field.type),
@@ -3456,8 +3301,15 @@ class CppGenerator(t_generator.Generator):
 
         first = True
         for field in fields:
-            isset_expr = ('{0}->{1}' if self._is_reference(field)
-                          else '{0}->__isset.{1}').format(this, field.name)
+            if self._is_reference(field):
+                isset_expr_format = '{0}->{1}'
+            elif self._is_optional_wrapped(field):
+                isset_expr_format = '{0}->{1}.hasValue()'
+            else:
+                isset_expr_format = '{0}->__isset.{1}'
+
+            isset_expr = isset_expr_format.format(this, field.name)
+
             if result == True:
                 if first:
                     first = False
@@ -3516,10 +3368,13 @@ class CppGenerator(t_generator.Generator):
         name = prefix + tfield.name + self._type_access_suffix(tfield.type) + \
                 suffix
         pointer = self._is_reference(tfield)
-        self._generate_serialize_type(scope, tfield.type, name, method,
+        self._generate_serialize_type(scope, tfield.type, name,
+                                      self._is_optional_wrapped(tfield),
+                                      method,
                                       struct_method, binary_method, pointer)
 
     def _generate_serialize_type(self, scope, otype, name,
+                                 is_optional_wrapped,
                                  method='write',
                                  struct_method=None,
                                  binary_method=None,
@@ -3531,16 +3386,21 @@ class CppGenerator(t_generator.Generator):
         if binary_method is None:
             binary_method = method
 
+        val_expr = name
+        if is_optional_wrapped:
+            val_expr += ".value()"
+
         # Do nothing for void types
         if ttype.is_void:
             raise TypeError('CANNOT GENERATE SERIALIZE CODE FOR void TYPE: '\
                             + name)
         if ttype.is_struct or ttype.is_xception:
-            self._generate_serialize_struct(scope, otype, ttype.as_struct, name,
+            self._generate_serialize_struct(scope, otype, ttype.as_struct,
+                                            val_expr,
                                             struct_method, pointer)
         elif ttype.is_container:
             self._generate_serialize_container(scope, ttype.as_container,
-                                               name,
+                                               val_expr,
                                                method,
                                                struct_method=struct_method,
                                                binary_method=binary_method)
@@ -3554,28 +3414,29 @@ class CppGenerator(t_generator.Generator):
                 if btype.is_binary:
                     txt = '{binary_method}Binary({name});'
                 else:
-                    txt = '{method}String({name});'
+                    txt = '{method}String({val_expr});'
             elif base == t_base.bool:
-                txt = '{method}Bool({name});'
+                txt = '{method}Bool({val_expr});'
             elif base == t_base.byte:
-                txt = '{method}Byte({name});'
+                txt = '{method}Byte({val_expr});'
             elif base == t_base.i16:
-                txt = '{method}I16({name});'
+                txt = '{method}I16({val_expr});'
             elif base == t_base.i32:
-                txt = '{method}I32({name});'
+                txt = '{method}I32({val_expr});'
             elif base == t_base.i64:
-                txt = '{method}I64({name});'
+                txt = '{method}I64({val_expr});'
             elif base == t_base.double:
-                txt = '{method}Double({name});'
+                txt = '{method}Double({val_expr});'
             elif base == t_base.float:
-                txt = '{method}Float({name});'
+                txt = '{method}Float({val_expr});'
             else:
                 raise CompilerError('No C++ writer for base type ' + \
                         btype.t_base_name(base) + name)
             txt = 'xfer += prot_->' + txt.format(name, **locals())
             scope(txt)
         elif ttype.is_enum:
-            scope('xfer += prot_->{0}I32((int32_t){1});'.format(method, name))
+            scope('xfer += prot_->{0}I32((int32_t){1});'
+                  .format(method, val_expr))
         else:
             raise TypeError(("DO NOT KNOW HOW TO SERIALIZE '{0}' "
                              "TYPE {1}").format(name, self._type_name(ttype)))
@@ -3758,12 +3619,25 @@ class CppGenerator(t_generator.Generator):
                     out('template<> struct hash<typename ' + full_name + '> {')
                     out('size_t operator()(const ' + full_name + '&) const;')
                     out("};")
+                    if frontend.t_enum == obj.__class__:
+                        out('inline size_t '
+                            + 'hash<typename ' + full_name + '>::operator()'
+                            +    '(const ' + full_name + '& e) const {')
+                        out('  return std::hash<int64_t>()(static_cast<int64_t>(e));')
+                        out('}')
 
                 if gen_equal_to:
                     out('template<> struct equal_to<typename ' + full_name + '> {')
                     out('bool operator()(const ' + full_name + '&,')
                     out('const ' + full_name + '&) const;')
                     out("};")
+                    if frontend.t_enum == obj.__class__:
+                        out('inline bool '
+                            + 'equal_to<typename ' + full_name + '>::operator()'
+                            +    '(const ' + full_name + '& e1,'
+                            +    ' const ' + full_name + '& e2) const {')
+                        out('  return e1 == e2;')
+                        out('}')
 
     def _generate_cpp_struct(self, obj, is_exception=False):
         # We write all of these to the types scope
@@ -3945,11 +3819,13 @@ class CppGenerator(t_generator.Generator):
         # Open namespace
         sns = sg.namespace(self._get_namespace()).scope
 
+        # COMPATIBILITY MODE
         if self.flag_compatibility:
-            instance_name = 'g_' + self._program.name + '_constants'
             cpp1_namespace = self._namespace_prefix(
                 self._program.get_namespace('cpp')).lstrip()
-            sns('using ' + cpp1_namespace + instance_name + ';')
+            sns('using ' + cpp1_namespace + self._program.name + '_constants;')
+            sns('using ' + cpp1_namespace + self._program.name
+                + '_constants_codemod;')
             sns.release()
             sg.release()
             return
@@ -4042,21 +3918,6 @@ class CppGenerator(t_generator.Generator):
             for c in constants:
                 s()
                 s('{0} {1};'.format(self._type_name(c.type), c.name))
-
-        # define global constants singleton
-        sns('#pragma GCC diagnostic push')
-        sns('#pragma GCC diagnostic ignored "-Wdeprecated-declarations"')
-        sns()
-
-        sns.extern(('const {0}Constants __attribute__((__deprecated__("{1}"))) '
-            + 'g_{0}_constants').format(name, ("g_{0}_constants suffers from "
-                + "the 'static initialization order fiasco' (https://isocpp.org"
-                + "/wiki/faq/ctors#static-init-order) and may CRASH you program"
-                + ". Instead, use {0}_constants::CONSTANT_NAME()")
-                .format(name)))
-
-        sns()
-        sns('#pragma GCC diagnostic pop')
 
         sns.release()  # namespace
 
@@ -4153,6 +4014,8 @@ class CppGenerator(t_generator.Generator):
         s('#include <thrift/lib/cpp2/protocol/Protocol.h>')
         if not self.flag_bootstrap:
             s('#include <thrift/lib/cpp/TApplicationException.h>')
+        if self.flag_optionals:
+            s('#include <folly/Optional.h>')
         s('#include <folly/io/IOBuf.h>')
         s('#include <folly/io/Cursor.h>')
         s('#include <boost/operators.hpp>')

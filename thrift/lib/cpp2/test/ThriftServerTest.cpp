@@ -25,13 +25,14 @@
 #include <thrift/lib/cpp/async/TEventBase.h>
 #include <thrift/lib/cpp/async/TAsyncSocket.h>
 #include <thrift/lib/cpp/async/TAsyncServerSocket.h>
+#include <thrift/lib/cpp/transport/THeader.h>
 
 #include <thrift/lib/cpp2/async/StubSaslClient.h>
 #include <thrift/lib/cpp2/async/StubSaslServer.h>
 #include <thrift/lib/cpp2/TestServer.h>
 
 #include <folly/experimental/fibers/FiberManagerMap.h>
-#include <folly/wangle/concurrent/GlobalExecutor.h>
+#include <wangle/concurrent/GlobalExecutor.h>
 
 #include <boost/cast.hpp>
 #include <boost/lexical_cast.hpp>
@@ -130,35 +131,6 @@ TEST(ThriftServer, InsecureAsyncCpp2Test) {
 
 TEST(ThriftServer, SecureAsyncCpp2Test) {
   AsyncCpp2Test(true);
-}
-
-TEST(ThriftServer, SyncClientTest) {
-  apache::thrift::TestThriftServerFactory<TestInterface> factory;
-  ScopedServerThread sst(factory.create());
-  TEventBase base;
-  std::shared_ptr<TAsyncSocket> socket(
-    TAsyncSocket::newSocket(&base, *sst.getAddress()));
-
-  TestServiceAsyncClient client(
-    std::unique_ptr<HeaderClientChannel,
-                    apache::thrift::async::TDelayedDestruction::Destructor>(
-                      new HeaderClientChannel(socket)));
-
-  boost::polymorphic_downcast<HeaderClientChannel*>(
-    client.getChannel())->setTimeout(10000);
-  std::string response;
-  client.sync_sendResponse(response, 64);
-  EXPECT_EQ(response, "test64");
-  RpcOptions options;
-  options.setTimeout(std::chrono::milliseconds(1));
-  try {
-    // should timeout
-    client.sync_sendResponse(options, response, 10000);
-  } catch (const TTransportException& e) {
-    EXPECT_EQ(int(TTransportException::TIMED_OUT), int(e.getType()));
-    return;
-  }
-  ADD_FAILURE();
 }
 
 TEST(ThriftServer, GetLoadTest) {
@@ -273,7 +245,16 @@ TEST(ThriftServer, LargeSendTest) {
 }
 
 TEST(ThriftServer, OverloadTest) {
+  const int numThreads = 1;
+  const int queueSize = 10;
   apache::thrift::TestThriftServerFactory<TestInterface> factory;
+  {
+    auto tm = concurrency::ThreadManager::newSimpleThreadManager(
+        numThreads, 0, false, queueSize);
+    tm->threadFactory(std::make_shared<concurrency::PosixThreadFactory>());
+    tm->start();
+    factory.useSimpleThreadManager(false).useThreadManager(tm);
+  }
   ScopedServerThread sst(factory.create());
   TEventBase base;
   std::shared_ptr<TAsyncSocket> socket(
@@ -310,9 +291,9 @@ TEST(ThriftServer, OverloadTest) {
 
   // Fill up the server's request buffer
   client.sendResponse(lambda, tval);
-  client.sendResponse(lambda, 0);
-  client.sendResponse(lambda, 0);
-  client.sendResponse(lambda, 0);
+  for (int i = 0; i < numThreads + queueSize; i++) {
+    client.sendResponse(lambda, 0);
+  }
   base.loop();
 
   // We expect one 'too full' exception (queue size is 2, one being worked on)
@@ -551,9 +532,7 @@ TEST(ThriftServer, Thrift1OnewayRequestTest) {
   apache::thrift::TestThriftServerFactory<TestInterface> factory;
   auto cpp2Server = factory.create();
   cpp2Server->setNWorkerThreads(1);
-  cpp2Server->setIsOverloaded([]() {
-    return true;
-  });
+  cpp2Server->setIsOverloaded([](const THeader* header) { return true; });
   apache::thrift::util::ScopedServerThread st(cpp2Server);
 
   std::shared_ptr<TestServiceClient> client = getThrift1Client(
@@ -570,9 +549,7 @@ TEST(ThriftServer, Thrift1OnewayRequestTest) {
     ADD_FAILURE();
   }
 
-  cpp2Server->setIsOverloaded([]() {
-    return false;
-  });
+  cpp2Server->setIsOverloaded([](const THeader* header) { return false; });
   // Send another twoway request. Client should receive a response
   // with correct seqId
   client->sendResponse(response, 0);

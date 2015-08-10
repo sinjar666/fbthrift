@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <folly/wangle/channel/Handler.h>
+#include <wangle/channel/Handler.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/io/IOBuf.h>
@@ -70,7 +70,7 @@ class TAsyncTransportHandler
     ctx->getPipeline()->setTransport(transport_);
   }
 
-  folly::Future<void> write(
+  folly::Future<folly::Unit> write(
       Context* ctx,
       std::unique_ptr<folly::IOBuf> buf) override {
     if (UNLIKELY(!buf)) {
@@ -79,7 +79,7 @@ class TAsyncTransportHandler
 
     if (!transport_->good()) {
       VLOG(5) << "transport is closed in write()";
-      return folly::makeFuture<void>(
+      return folly::makeFuture<folly::Unit>(
           transport::TTransportException("transport is closed in write()"));
     }
 
@@ -89,7 +89,7 @@ class TAsyncTransportHandler
     return future;
   };
 
-  folly::Future<void> close(Context* ctx) override {
+  folly::Future<folly::Unit> close(Context* /*ctx*/) override {
     if (transport_) {
       detachReadCallback();
       transport_->closeNow();
@@ -135,7 +135,7 @@ class TAsyncTransportHandler
       delete this;
     }
 
-    void writeError(size_t bytesWritten,
+    void writeError(size_t /*bytesWritten*/,
                     const transport::TTransportException& ex)
       noexcept override {
       promise_.setException(ex);
@@ -144,7 +144,7 @@ class TAsyncTransportHandler
 
    private:
     friend class TAsyncTransportHandler;
-    folly::Promise<void> promise_;
+    folly::Promise<folly::Unit> promise_;
   };
 
   folly::IOBufQueue bufQueue_{folly::IOBufQueue::cacheChainLength()};

@@ -35,7 +35,7 @@ def read_lines(path):
 def mkdir_p(path, mode):
     try:
         os.makedirs(path, mode)
-    except IOError:
+    except OSError:
         pass
 
 def parse_manifest(raw):
@@ -55,6 +55,14 @@ fixtureNames = manifest.keys()
 
 class MyTest(unittest.TestCase):
 
+    MSG = " ".join([
+        "One or more fixtures are out of sync with the thrift compiler.",
+        "To sync them, build thrift and then run:",
+        "`thrift/compiler/test/build_fixtures <build-dir>`, where",
+        "<build-dir> is a path where the program `thrift/compiler/thrift`",
+        "may be found.",
+    ])
+
     def setUp(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
@@ -72,7 +80,7 @@ class MyTest(unittest.TestCase):
         cmds = read_lines(os.path.join(self.tmp, 'cmd'))
         for cmd in cmds:
             subprocess.check_call(
-                [thrift, '--gen'] + shlex.split(cmd.strip()),
+                [thrift, '-r', '--gen'] + shlex.split(cmd.strip()),
                 cwd=self.tmp,
                 close_fds=True,
             )
@@ -81,14 +89,17 @@ class MyTest(unittest.TestCase):
             cwd=self.tmp,
             close_fds=True,
         ).splitlines()
-        print(gens, file=sys.stderr)
         gens = [gen.split('/', 1)[1] for gen in gens]
-        self.assertEqual(sorted(gens), sorted(manifest[name]))
-        for gen in gens:
-            genc = read_file(os.path.join(self.tmp, gen))
-            fixc = read_file(os.path.join(fixtureChildDir, gen))
-            self.assertEqual(len(genc), len(fixc))
-            self.assertMultiLineEqual(genc, fixc)
+        try:
+            self.assertEqual(sorted(gens), sorted(manifest[name]))
+            for gen in gens:
+                genc = read_file(os.path.join(self.tmp, gen))
+                fixc = read_file(os.path.join(fixtureChildDir, gen))
+                self.assertEqual(len(genc), len(fixc))
+                self.assertMultiLineEqual(genc, fixc)
+        except Exception as e:
+            print(self.MSG, file=sys.stderr)
+            raise e
 
 def add_fixture(klazz, name):
     def test_method(self):

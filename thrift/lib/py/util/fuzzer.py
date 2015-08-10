@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import os
+import pprint
 import random
 import sys
 import time
@@ -27,11 +28,13 @@ try:
     from ServiceRouter import ConnConfigs, ServiceOptions, ServiceRouter
     SR_AVAILABLE = True
 except ImportError:
-    SR_AVAILABLE = False  # ServiceRouter not available
+    SR_AVAILABLE = False
 
 from thrift import Thrift
 from thrift.transport import TTransport, TSocket, TSSLSocket, THttpClient
 from thrift.protocol import TBinaryProtocol, TCompactProtocol, THeaderProtocol
+
+from . import randomizer
 
 def positive_int(s):
     """Typechecker for positive integers"""
@@ -81,34 +84,12 @@ class FuzzerConfiguration(object):
             },
             'default': False
         },
-        'container_max_size_bits': {
-            'description': ('Max bits in container size '
-                            '(e.g., 8 bits => up to 511 elements in list).'),
-            'type': positive_int,
-            'flag': '-m',
-            'default': 8
-        },
-        'default_probability': {
-            'description': ('Probability of using the default value of a '
-                            'field, if it exists.'),
-            'type': prob_float,
-            'flag': '-d',
-            'default': 0.05,
-            'attr_name': 'p_default'
-        },
-        'exclude_field_probability': {
-            'description': 'Probability of excluding a non-required field.',
-            'type': prob_float,
-            'flag': '-e',
-            'default': 0.15,
-            'attr_name': 'p_exclude_field'
-        },
-        'exclude_arg_probability': {
-            'description': 'Probability of excluding an argument.',
-            'type': prob_float,
-            'flag': '-E',
-            'default': 0.01,
-            'attr_name': 'p_exclude_arg'
+        'constraints': {
+            'description': 'JSON Constraint dictionary',
+            'type': str,
+            'flag': '-Con',
+            'default': {},
+            'is_json': True
         },
         'framed': {
             'description': 'Use framed transport.',
@@ -145,13 +126,6 @@ class FuzzerConfiguration(object):
             'attr_name': 'n_iterations',
             'default': 1000
         },
-        'invalid_enum_probability': {
-            'description': 'Probability of invalid enum.',
-            'type': prob_float,
-            'flag': '-i',
-            'attr_name': 'p_invalid_enum',
-            'default': 0.01
-        },
         'logfile': {
             'description': 'File to write output logs.',
             'type': str,
@@ -166,12 +140,6 @@ class FuzzerConfiguration(object):
                 'choices': ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             },
             'default': 'INFO'
-        },
-        'recursion_depth': {
-            'description': 'Maximum struct recursion depth. Default 4.',
-            'type': positive_int,
-            'flag': '-r',
-            'default': 4
         },
         'service': {
             'description': 'Path to file of Python service module.',
@@ -190,13 +158,6 @@ class FuzzerConfiguration(object):
             },
             'default': False
         },
-        'string_max_size_bits': {
-            'description': ('Max bits in string length '
-                            '(e.g., 10 bits => up to 2047 chars in string.)'),
-            'type': positive_int,
-            'flag': '-M',
-            'default': 10
-        },
         'unframed': {
             'description': 'Use unframed transport.',
             'type': bool,
@@ -206,23 +167,6 @@ class FuzzerConfiguration(object):
                 'const': True
             },
             'default': False
-        },
-        'unicode_ranges': {
-            'description': ('JSON Array of arrays indicating ranges of '
-                            'characters to include in unicode strings. '
-                            'Default includes ASCII characters.'),
-            'type': str,
-            'flag': '-ur',
-            'default': "[[0, 127]]",
-            'is_json': True
-        },
-        'unicode_out_of_range_probability': {
-            'description': ('Probability a unicode string will include '
-                            'characters outside `unicode_ranges`.'),
-            'type': prob_float,
-            'flag': '-up',
-            'default': 0.05,
-            'attr_name': 'p_unicode_oor'
         },
         'url': {
             'description': 'The URL to connect to for HTTP transport',
@@ -237,6 +181,20 @@ class FuzzerConfiguration(object):
             'type': str,
             'flag': '-t',
             'default': None
+        }
+        argspec['conn_configs'] = {
+            'description': 'ConnConfigs to use for ServiceRouter connection',
+            'type': str,
+            'flag': '-Conn',
+            'default': {},
+            'is_json': True
+        }
+        argspec['service_options'] = {
+            'description': 'ServiceOptions to use for ServiceRouter connection',
+            'type': str,
+            'flag': '-SO',
+            'default': {},
+            'is_json': True
         }
 
     def __init__(self, service=None):
@@ -369,9 +327,7 @@ class FuzzerConfiguration(object):
         return settings
 
     def __str__(self):
-        pairs = ['  %s=%s' % (key, str(val))
-                 for key, val in six.iteritems(self.__dict__)]
-        return 'Configuration(\n%s\n)' % ('\n'.join(pairs))
+        return 'Configuration(\n%s\n)' % pprint.pformat(self.__dict__)
 
     def load_service(self):
         if self.service is not None:
@@ -516,6 +472,8 @@ class Service(object):
             thrift_exceptions = []
             if result is not None:
                 for res_spec in result.thrift_spec:
+                    if res_spec is None:
+                        continue
                     if res_spec[2] != 'success':
                         # This is an exception return type
                         spec_args = res_spec[3]
@@ -523,7 +481,7 @@ class Service(object):
                         thrift_exceptions.append(exception_type)
 
             methods[method_name] = {
-                'args_spec': args,
+                'args_class': args,
                 'result_spec': result,
                 'thrift_exceptions': tuple(thrift_exceptions)
             }
@@ -587,7 +545,7 @@ class FuzzerClient(object):
         if len(parts) == 1:
             return (parts[0], default_port)
         else:
-            # FuzzerConstraints ensures parts[1] is an int
+            # FuzzerConfiguration ensures parts[1] is an int
             return (parts[0], int(parts[1]))
 
     def _get_client_by_host(self):
@@ -614,10 +572,19 @@ class FuzzerClient(object):
         serviceRouter = ServiceRouter()
 
         overrides = ConnConfigs()
-        overrides[b"sock_recvtimeout"] = b"1000"  # recv timeout in millisec
+        for key, val in six.iteritems(config.conn_configs):
+            key = six.binary_type(key)
+            val = six.binary_type(val)
+            overrides[key] = val
 
         sr_options = ServiceOptions()
-        sr_options[b"svc_select_count"] = [b"3"]  # select 3 services
+        for key, val in six.iteritems(config.service_options):
+            key = six.binary_type(key)
+            if not isinstance(val, list):
+                raise TypeError("Service option %s expected list; got %s (%s)"
+                                % (key, val, type(val)))
+            val = [six.binary_type(elem) for elem in val]
+            sr_options[key] = val
 
         service_name = config.tier
 
@@ -673,281 +640,6 @@ class FuzzerClient(object):
 
         return ret
 
-
-class Req:
-    """Enum defined in /thrift/compiler/parse/t_field.h"""
-    T_REQUIRED = 0
-    T_OPTIONAL = 1
-    T_OPT_IN_REQ_OUT = 2
-
-def random_int_factory(k):
-    """Return a function that generates a random k-bit signed int"""
-    min_ = -(1 << (k - 1))   # -2**(k-1)
-    max_ = 1 << (k - 1) - 1  # +2**(k-1)-1
-
-    def random_int_k_bits(spec_args):
-        return random.randint(min_, max_)
-    return random_int_k_bits
-
-
-FLOAT_EDGE_CASES = [0.0, float('nan'), float('inf'), float('-inf')]
-P_FLOAT_EDGE_CASE = 0.0
-
-def random_float_factory(e, m):
-    """Return a function that generates a random floating point value
-
-    e = number of exponent bits
-    m = number of mantissa bits
-    """
-    def random_float(spec_args):
-        if random.random() < P_FLOAT_EDGE_CASE:
-            return random.choice(FLOAT_EDGE_CASES)
-        else:
-            # Distribute exponents logarithmically
-            # (Exponents in [2**k, 2**(k+1)) are twice as likely
-            #  to be chosen as exponents in [2**(k+1), 2**(k+2))
-            exponent_bits = random.randint(1, e)
-            exponent = random.randint(0, (1 << exponent_bits) - 1)
-
-            # Get a fraction uniform over [0, 1]
-            fraction = random.random()
-            if exponent != 0:
-                # Not gradual underflow
-                fraction += 1
-
-            # Include negative exponents
-            exponent -= 1 << (exponent_bits - 1)
-
-            # Possibly negate fraction
-            if random.choice([True, False]):
-                fraction *= -1
-
-            return fraction * (2 ** exponent)
-    return random_float
-
-
-class TTypeRandomizer:
-    """Functions to generate random values for thrift types"""
-
-    def __init__(self, config):
-        self.randomizer_by_ttype = {
-            Thrift.TType.BOOL: self.random_bool,
-            Thrift.TType.BYTE: random_int_factory(8),
-            Thrift.TType.I08: random_int_factory(8),
-            Thrift.TType.DOUBLE: random_float_factory(11, 52),
-            Thrift.TType.I16: random_int_factory(16),
-            Thrift.TType.I32: self.random_i32,
-            Thrift.TType.I64: random_int_factory(64),
-            Thrift.TType.STRING: self.random_string,
-            Thrift.TType.STRUCT: self.random_struct,
-            Thrift.TType.MAP: self.random_map,
-            Thrift.TType.SET: self.random_set,
-            Thrift.TType.LIST: self.random_list,
-            Thrift.TType.UTF8: self.random_utf8,
-            Thrift.TType.UTF16: self.random_utf16,
-            Thrift.TType.FLOAT: random_float_factory(8, 23)
-        }
-
-        self.container_max_size_bits = config.container_max_size_bits
-        self.string_max_size_bits = config.string_max_size_bits
-        self.p_exclude_arg = config.p_exclude_arg
-        self.p_exclude_field = config.p_exclude_field
-        self.p_default = config.p_default
-        self.p_invalid_enum = config.p_invalid_enum
-        self.unicode_ranges = config.unicode_ranges
-        self.p_unicode_oor = config.p_unicode_oor
-        self.max_recursion_depth = config.recursion_depth
-
-    def random_bool(self, spec_args):
-        return random.choice([True, False])
-
-    random_int_32 = random_int_factory(32)
-
-    def random_i32(self, spec_args):
-        if (spec_args is None or
-            (self.p_invalid_enum != 0.0 and
-             random.random() < self.p_invalid_enum)):
-            # Regular i32 field, or a (probably) invalid enum
-            return self.random_int_32()
-        else:
-            # Valid enum field
-            return random.choice(spec_args._VALUES_TO_NAMES.keys())
-
-    def _random_exp_distribution(self, max_bits):
-        """Return an int with up to max_bits bits
-
-        Values generated here are distributed step-wise exponentially.
-        For 1 < k <= max_bits, if x is the return value, then:
-
-        P(2**(k-2) <= x < 2**(k-1)) == P(2**(k-1) <= x < 2**k)
-
-        The range [2**(k-1), 2**k) is the set of k-bit intgeters
-        (that is, the most significant `1` is at position k.)
-
-        Since each consecutive [2**(k-1), 2**k) bucket has twice
-        as many elements as the last, each individual element has
-        half the probability of being returned. In general:
-
-        P(return=x) == (1 / (n+1)) * (1 / (2 ** floor(log(x))))
-
-        1/(n+1) is the probability the bucket containing x is chosen.
-        (2**(floor(log(x)))) is the probability x is chosen among its
-        bucket, since there are floor(log(x)) elements in its bucket.
-
-        For example, if x=11, floor(log(x)) = 3, and there are 2**3=8
-        elements in the bucket of 4-bit numbers (8 through 15.)
-
-        The one exception to the probability given above is if x=0.
-        log(0) is undefined, but P(return=0) = (1 / n+1).
-        """
-        n_bits = random.randint(0, max_bits)
-        if n_bits == 0:
-            return 0
-        return random.randint(1 << (n_bits - 1),
-                              (1 << n_bits) - 1)
-
-    def _random_string_length(self):
-        return self._random_exp_distribution(self.string_max_size_bits)
-
-    def _random_container_length(self):
-        return self._random_exp_distribution(self.container_max_size_bits)
-
-    def random_string(self, spec_args):
-        return ''.join(chr(random.randint(0, 127)) for
-                       _ in sm.xrange(self._random_string_length()))
-
-    def random_struct(self, spec_args):
-        ttype, specs, is_union = spec_args
-
-        # Check if we have exceeded the maximum recursion depth for this type
-        depth = self.recursion_depth[ttype.__name__]
-        max_depth = self.max_recursion_depth
-        if depth >= max_depth:
-            if depth == max_depth:
-                # Already at maximum recursion depth
-                # Cannot generate new struct of this type
-                return None
-            else:
-                raise ValueError("Maximum recursion depth exceeded for %s" % (
-                    ttype.__name__))
-
-        self.recursion_depth[ttype.__name__] += 1
-
-        specs = [spec for spec in specs if spec is not None]
-        if is_union:
-            # Only populate one field
-            specs = [random.choice(specs)]
-        fields = self.random_fields(specs)
-
-        self.recursion_depth[ttype.__name__] -= 1
-
-        if fields is None:
-            # Unable to populate fields
-            return None
-        else:
-            return ttype(**fields)
-
-    def _random_container(self, elem_ttype, elem_spec_args, length=None):
-        length = self._random_container_length() if length is None else length
-
-        randomizer_fn = self[elem_ttype]
-        elements = []
-
-        for _ in sm.xrange(length):
-            value = randomizer_fn(elem_spec_args)
-            if value is not None:
-                elements.append(value)
-        return elements
-
-    def random_map(self, spec_args):
-        key_type, key_spec_args, val_type, val_spec_args = spec_args
-
-        keys = self._random_container(key_type, key_spec_args)
-        vals = self._random_container(val_type, val_spec_args, len(keys))
-
-        return dict(itertools.izip(keys, vals))
-
-    def random_set(self, spec_args):
-        return set(self._random_container(*spec_args))
-
-    def random_list(self, spec_args):
-        return self._random_container(*spec_args)
-
-    def random_utf8(self, spec_args):
-        length = self._random_string_length()
-        if (len(self.unicode_ranges) == 0 or
-                random.random() < self.p_unicode_oor):
-
-            # Out of specified ranges
-            return ''.join(six.unichr(random.randint(0, 0x110000)) for
-                           _ in sm.xrange(length))
-        else:
-            chars = []
-            for _ in sm.xrange(length):
-                range_ = random.choice(self.unicode_ranges)
-                chars.append(six.unichr(random.randint(range_[0], range_[1])))
-            return ''.join(chars)
-
-    # The only difference between UTF8 and UTF16 is how the protocol will
-    # encode the unicode string
-    random_utf16 = random_utf8
-
-    def __getitem__(self, ttype):
-        if ttype in self.randomizer_by_ttype:
-            return self.randomizer_by_ttype[ttype]
-        else:
-            raise TypeError("Unsupported field type: %d" % ttype)
-
-    def random_fields(self, specs, is_toplevel=False):
-        """Get random fields. Works for argument fields and struct fields.
-
-        Fields are returned as a dictionary of {field_name: value}
-
-        If fields cannot be generated for these specs (due to
-        "required" fields making the recursion depth limit
-        unsatisfiable,) then None will be returned instead.
-
-        is_toplevel should be True if the fields are to be generated
-        for a function call rather than a struct.
-        """
-        if is_toplevel:
-            self.recursion_depth = collections.defaultdict(int)
-            exclude_probability = self.p_exclude_arg
-        else:
-            exclude_probability = self.p_exclude_field
-
-        fields = {}
-        for spec in specs:
-            if spec is None:
-                continue
-
-            (key, ttype, name, spec_args, default_value, req) = spec
-
-            if (req != Req.T_REQUIRED and
-                    random.random() < exclude_probability):
-                continue
-
-            if (default_value is not None and
-                    random.random() < self.p_default):
-                fields[name] = default_value
-                continue
-
-            random_fn = self[ttype]
-            value = random_fn(spec_args)
-
-            if value is None:
-                # Could not generate a value for this field
-                if req == Req.T_REQUIRED:
-                    # Field was required -- cannot generate struct
-                    return None
-                else:
-                    # Ignore this field
-                    continue
-            else:
-                fields[name] = value
-
-        return fields
-
 class Timer(object):
     def __init__(self, aggregator, category, action):
         self.aggregator = aggregator
@@ -994,6 +686,16 @@ class TimeAggregator(object):
 
 
 class FuzzTester(object):
+    summary_interval = 1  # Seconds between summary logs
+
+    class Result:
+        Success = 0
+        TransportException = 1
+        ApplicationException = 2
+        UserDefinedException = 3
+        OtherException = 4
+        Crash = 5
+
     def __init__(self, config):
         self.config = config
         self.service = None
@@ -1005,13 +707,21 @@ class FuzzTester(object):
         if self.config.logfile is None:
             logfile = '/dev/null'
         log_level = getattr(logging, self.config.loglevel)
+
+        datefmt = '%Y-%m-%d %H:%M:%S'
+        fmt = "[%(asctime)s] [%(levelname)s] %(message)s"
+
         if logfile == 'stdout':
             logging.basicConfig(stream=sys.stdout, level=log_level)
         else:
             logging.basicConfig(filename=self.config.logfile, level=log_level)
 
+        log_handler = logging.getLogger().handlers[0]
+        log_handler.setFormatter(logging.Formatter(fmt, datefmt=datefmt))
+
     def start_timing(self):
         self.timer = TimeAggregator()
+        self.next_summary_time = time.time() + self.__class__.summary_interval
 
     def _call_string(self, method_name, kwargs):
         kwarg_str = ', '.join('%s=%s' % (k, v)
@@ -1028,6 +738,8 @@ class FuzzTester(object):
                 self.client.make_call(method_name, kwargs,
                                             is_oneway)
         except thrift_exceptions as e:
+            self.record_result(
+                method_name, FuzzTester.Result.UserDefinedException)
             if self.config.loglevel == "DEBUG":
                 with self.timer.time(method_name, "Logging"):
                     logging.debug("Got thrift exception: %r" % e)
@@ -1035,17 +747,18 @@ class FuzzTester(object):
                         self._call_string(method_name, kwargs)))
 
         except Thrift.TApplicationException as e:
+            self.record_result(
+                method_name, FuzzTester.Result.ApplicationException)
             if self.config.allow_application_exceptions:
                 if self.config.loglevel == "DEBUG":
                     with self.timer.time(method_name, "Logging"):
-                        logging.debug("Got TApplication exception %s (%r)" % (
-                            e, e))
+                        logging.debug("Got TApplication exception %s" % e)
                         logging.debug("Exception thrown by call: %s" % (
                             self._call_string(method_name, kwargs)))
             else:
                 with self.timer.time(method_name, "Logging"):
                     self.n_exceptions += 1
-                    logging.error("Got application exception: %r" % e)
+                    logging.error("Got application exception: %s" % e)
                     logging.error("Offending call: %s" % (
                         self._call_string(method_name, kwargs)))
 
@@ -1059,13 +772,19 @@ class FuzzTester(object):
 
             if "errno = 111: Connection refused" in e.args[0]:
                 # Unable to connect to server - server may be down
+                self.record_result(method_name, FuzzTester.Result.Crash)
                 return False
 
             if not self.client.reset():
                 logging.error("Inferring server crash.")
+                self.record_result(method_name, FuzzTester.Result.Crash)
                 return False
 
+            self.record_result(
+                method_name, FuzzTester.Result.TransportException)
+
         except Exception as e:
+            self.record_result(method_name, FuzzTester.Result.OtherException)
             with self.timer.time(method_name, "Logging"):
                 self.n_exceptions += 1
                 logging.error("Got exception %s (%r)" % (e, e))
@@ -1076,6 +795,7 @@ class FuzzTester(object):
                         self._call_string(method_name, self.previous_kwargs)))
 
         else:
+            self.record_result(method_name, FuzzTester.Result.Success)
             if self.config.loglevel == "DEBUG":
                 with self.timer.time(method_name, "Logging"):
                     logging.debug("Successful call: %s" % (
@@ -1085,39 +805,175 @@ class FuzzTester(object):
 
         return True
 
-    def fuzz_kwargs(self, method_name, args_spec, n_iterations):
+    def fuzz_kwargs(self, method_name, n_iterations):
         # For now, just yield n random sets of args
         # In future versions, fuzz fields more methodically based
         # on feedback and seeds
         for _ in sm.xrange(n_iterations):
             with self.timer.time(method_name, "Randomizing"):
-                kwargs = self.randomizer.random_fields(args_spec.thrift_spec,
-                                                       is_toplevel=True)
-
-            if kwargs is None:
+                method_randomizer = self.method_randomizers[method_name]
+                args_struct = method_randomizer.generate()
+            if args_struct is None:
                 logging.error("Unable to produce valid arguments for %s" %
                               method_name)
             else:
+                kwargs = args_struct.__dict__  # Get members of args struct
                 yield kwargs
+
+    def get_method_randomizers(self, methods, constraints):
+        """Create a StructRandomizer for each method"""
+        state = randomizer.RandomizerState()
+        method_randomizers = {}
+
+        state.push_type_constraints(constraints)
+
+        for method_name in methods:
+            method_constraints = constraints.get(method_name, {})
+            args_class = methods[method_name]['args_class']
+
+            # Create a spec_args tuple for the method args struct type
+            randomizer_spec_args = (
+                args_class,
+                args_class.thrift_spec,
+                False  # isUnion
+            )
+
+            method_randomizer = state.get_randomizer(
+                Thrift.TType.STRUCT,
+                randomizer_spec_args,
+                method_constraints
+            )
+            method_randomizers[method_name] = method_randomizer
+
+        return method_randomizers
+
+    def _split_key(self, key):
+        """Split a constraint rule key such as a.b|c into ['a', 'b', '|c']
+        Dots separate hierarchical field names and property names
+
+        Pipes indicate a type name and hashes indicate a field name,
+        though these rules are not yet supported.
+        """
+        components = []
+        start_idx = 0
+        cur_idx = 0
+        while cur_idx < len(key):
+            if (cur_idx != start_idx and
+                    key[cur_idx] in {'.', '|', '#'}):
+                components.append(key[start_idx:cur_idx])
+                start_idx = cur_idx
+                if key[cur_idx] == '.':
+                    start_idx += 1
+                cur_idx = start_idx
+            else:
+                cur_idx += 1
+        components.append(key[start_idx:])
+        return components
+
+    def preprocess_constraints(self, source_constraints):
+        """
+        The constraints dictionary can have any key
+        that follows the following format:
+
+        method_name[.arg_name][.field_name ...].property_name
+
+        The values in the dictionary can be nested such that inner field
+        names are subfields of the outer scope, and inner type rules are
+        applied only to subvalues of the out scope.
+
+        After preprocessing, each dictionary level should have exactly one
+        method name, field name, or property name as its key.
+
+        Any strings of identifiers are converted into the nested dictionary
+        structure. For example, the constraint set:
+
+        {'my_method.my_field.distribution': 'uniform(0,100)'}
+
+        Will be preprocessed to:
+
+        {'my_method':
+          {'my_field':
+             {'distribution': 'uniform(0, 100)'}
+          }
+        }
+        """
+        constraints = {}
+        scope_path = []
+
+        def add_constraint(rule):
+            walk_scope = constraints
+            for key in scope_path[:-1]:
+                if key not in walk_scope:
+                    walk_scope[key] = {}
+                walk_scope = walk_scope[key]
+            walk_scope[scope_path[-1]] = rule
+
+        def add_constraints_from_dict(d):
+            for key, rule in six.iteritems(d):
+                key_components = self._split_key(key)
+                scope_path.extend(key_components)
+                if isinstance(rule, dict):
+                    add_constraints_from_dict(rule)
+                else:
+                    add_constraint(rule)
+                scope_path[-len(key_components):] = []
+
+        add_constraints_from_dict(source_constraints)
+        return constraints
+
+    def start_result_counters(self):
+        """Create result counters. The counters object is a dict that maps
+        a method name to a counter of FuzzTest.Results
+        """
+        self.result_counters = collections.defaultdict(collections.Counter)
+
+    def record_result(self, method_name, result):
+        self.result_counters[method_name][result] += 1
+
+    def log_result_summary(self, method_name):
+        if time.time() >= self.next_summary_time:
+            results = []
+            for name, val in six.iteritems(vars(FuzzTester.Result)):
+                if name.startswith('_'):
+                    continue
+                count = self.result_counters[method_name][val]
+                if count > 0:
+                    results.append((name, count))
+            results.sort()
+            logging.info('%s count: {%s}' %
+                (method_name, ', '.join('%s: %d' % r for r in results)))
+
+            interval = self.__class__.summary_interval
+            # Determine how many full intervals have passed between
+            # self.next_summary_time (the scheduled time for this summary) and
+            # the time the summary is actually completed.
+            intervals_passed = int(
+                (time.time() - self.next_summary_time) / interval)
+            # Schedule the next summary for the first interval that has not yet
+            # fully passed
+            self.next_summary_time += interval * (intervals_passed + 1)
 
     def run(self):
         self.start_logging()
         self.start_timing()
+        self.start_result_counters()
 
         logging.info("Starting Fuzz Tester")
         logging.info(str(self.config))
 
         self.service = self.config.load_service()
-        self.randomizer = TTypeRandomizer(self.config)
 
         client_class = self.service.client_class
+
         methods = self.service.get_methods(self.config.functions)
+        constraints = self.preprocess_constraints(self.config.constraints)
+        self.method_randomizers = self.get_method_randomizers(
+            methods, constraints)
 
         logging.info("Fuzzing methods: %s" % methods.keys())
 
         with FuzzerClient(self.config, client_class) as self.client:
             for method_name, spec in six.iteritems(methods):
-                args_spec = spec['args_spec']
                 result_spec = spec.get('result_spec', None)
                 thrift_exceptions = spec['thrift_exceptions']
                 is_oneway = result_spec is None
@@ -1125,12 +981,13 @@ class FuzzTester(object):
                 self.n_tests = 0
                 self.n_exceptions = 0
                 did_crash = False
-                for kwargs in self.fuzz_kwargs(method_name, args_spec,
-                                                    self.config.n_iterations):
+                for kwargs in self.fuzz_kwargs(
+                        method_name, self.config.n_iterations):
                     if not self.run_test(method_name, kwargs, None,
                                          is_oneway, thrift_exceptions):
                         did_crash = True
                         break
+                    self.log_result_summary(method_name)
                     self.previous_kwargs = kwargs
 
                 if did_crash:

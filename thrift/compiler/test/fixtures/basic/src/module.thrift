@@ -9,5 +9,19 @@ struct MyStruct {
 }
 
 service MyService {
+  void ping()
+  string getRandomData()
+  bool hasDataById(1: i64 id)
   string getDataById(1: i64 id)
+  void putDataById(1: i64 id, 2: string data)
+  oneway void lobDataById(1: i64 id, 2: string data)
+}
+
+service MyServiceFast {
+  void ping() (thread='eb')
+  string getRandomData() (thread='eb')
+  bool hasDataById(1: i64 id) (thread='eb')
+  string getDataById(1: i64 id) (thread='eb')
+  void putDataById(1: i64 id, 2: string data) (thread='eb')
+  oneway void lobDataById(1: i64 id, 2: string data) (thread='eb')
 }

@@ -792,6 +792,7 @@ void t_cpp_generator::generate_hash_and_equal_to(ofstream& out,
                                                  const std::string& type_name) {
   const bool genHash = ttype->annotations_.count("cpp.declare_hash") > 0;
   const bool genEqualTo = ttype->annotations_.count("cpp.declare_equal_to") > 0;
+
   if (genHash || genEqualTo) {
     out << ns_close_ << endl << endl
       << indent() << namespace_open("std") << endl;
@@ -802,6 +803,13 @@ void t_cpp_generator::generate_hash_and_equal_to(ofstream& out,
         << fullName << "> {" << endl
         << indent() << "size_t operator()(const " << fullName << "&) const;"
         << endl << indent() << "};" << endl;
+      if (ttype->is_enum()) {
+        out << indent() << "inline size_t hash<typename " << fullName
+            << ">::operator()(const " << fullName << "& e) const {" << endl
+            << indent() << indent() << "return std::hash<int32_t>()("
+            << "static_cast<int32_t>(e));" << endl
+            << indent() << "}" << endl;
+      }
     }
     if (genEqualTo) {
       out << indent() << "template<> struct equal_to<typename "
@@ -809,6 +817,14 @@ void t_cpp_generator::generate_hash_and_equal_to(ofstream& out,
         << indent() << "bool operator()(const " << fullName << "&, " << endl
         << indent() << "const " << fullName << "&) const;"
         << endl << indent() << "};" << endl;
+      if (ttype->is_enum()) {
+        out << indent() << "inline bool equal_to<typename " << fullName
+            << ">::operator()("
+            << "const " << fullName << "& e1, const " << fullName << "& e2"
+            << ") const {" << endl
+            << indent() << indent() << "return e1 == e2;" << endl
+            << indent() << "}" << endl;
+      }
     }
 
     out << indent() << namespace_close("std") << endl << endl
@@ -966,6 +982,8 @@ void t_cpp_generator::generate_enum(t_enum* tenum) {
     "} " << endl <<
     "}} // apache::thrift " << endl << endl <<
     ns_open_ << endl;
+
+  generate_hash_and_equal_to(f_types_, tenum, tenum->get_name());
 }
 
 /**
@@ -1183,8 +1201,6 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     "\"-Wdeprecated-declarations\"" << endl << endl;
 
   f_consts_impl <<
-    "const " << program_name_ << "Constants g_" << program_name_ <<
-    "_constants;" << endl << endl <<
     program_name_ << "Constants::" << program_name_ << "Constants() {" << endl;
   indent_up();
   for (c_iter = consts.begin(); c_iter != consts.end(); ++c_iter) {
@@ -1197,19 +1213,6 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
   indent(f_consts_impl) <<
     "}" << endl << endl;
   f_consts_impl << "#pragma GCC diagnostic pop" << endl;
-
-  f_consts << endl << "#pragma GCC diagnostic push" << endl;
-  f_consts << "#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\""
-    << endl;
-  f_consts <<
-    endl <<
-    "extern const " << program_name_ << "Constants __attribute__(("
-      "__deprecated__(\"g_" << program_name_ << "_constants suffers from the "
-      "'static initialization order fiasco' (https://isocpp.org/wiki/faq/ctors"
-      "#static-init-order) and may CRASH your program. Instead, use " <<
-      program_name_ << "_constants::CONSTANT_NAME()\"))) g_" <<
-      program_name_ << "_constants;" << endl << endl;
-  f_consts << "#pragma GCC diagnostic pop" << endl;
 
   f_consts << endl <<
     ns_close_ << endl <<
@@ -1670,7 +1673,7 @@ void t_cpp_generator::generate_cpp_union(t_struct* tstruct) {
         tname = tname.substr(colonPos + 1);
       }
 
-      if (!nspace.empty()) {
+      if (!folly::trimWhitespace(nspace).empty()) {
         ret = "using namespace " + nspace + "; ";
       }
 
@@ -4034,7 +4037,7 @@ void t_cpp_generator::generate_service_interface_factory(t_service* tservice,
       "::apache::thrift::server::TConnectionContext* ctx) = 0;" <<
     endl <<
     indent() << "virtual void releaseHandler(" << base_if_name <<
-    "* handler) = 0;" << endl;
+    "* /*handler*/) = 0;" << endl;
 
   indent_down();
   f_header_ <<
@@ -4057,7 +4060,7 @@ void t_cpp_generator::generate_service_interface_factory(t_service* tservice,
     indent() << "  return iface_.get();" << endl <<
     indent() << "}" << endl <<
     indent() << "virtual void releaseHandler(" << base_if_name <<
-    "* handler) {}" << endl;
+    "* /*handler*/) {}" << endl;
 
   f_header_ <<
     endl <<
@@ -4605,7 +4608,7 @@ void t_cpp_generator::generate_service_client(t_service* tservice, string style)
       indent() << "}" << endl;
     if (!gen_no_client_completion_) {
       f_header_ <<
-        indent() << "virtual void completed__(bool success) {}" << endl;
+        indent() << "virtual void completed__(bool /*success*/) {}" << endl;
     }
   }
 
@@ -5970,12 +5973,17 @@ void t_cpp_generator::generate_process_function(t_service* tservice,
       out <<
         indent() << "template <class Protocol_>" << endl;
     }
+    bool seqid_oprot_used =
+      (gen_templates_ && !specialized) || !tfunction->is_oneway();
+
     out <<
       "void " << tservice->get_name() << "AsyncProcessor" << class_suffix <<
       "::process_" << tfunction->get_name() <<
-      "(std::function<void(bool ok)> cob, int32_t seqid, " <<
-      prot_type << "* iprot, " << prot_type <<
-      "* oprot, apache::thrift::server::TConnectionContext* " <<
+      "(std::function<void(bool ok)> cob, int32_t " <<
+      (seqid_oprot_used ? "seqid" : "/*seqid*/") <<
+      ", " << prot_type << "* iprot, " << prot_type << "* " <<
+      (seqid_oprot_used ? "oprot" : "/*oprot*/") <<
+      ", apache::thrift::server::TConnectionContext* " <<
       "connectionContext)" << endl;
     scope_up(out);
 
@@ -7090,7 +7098,8 @@ string t_cpp_generator::base_type_name(t_base_type::t_base tbase) {
 
 std::string t_cpp_generator::generate_reflection_initializer_name(t_type* type){
   char buf[21];
-  sprintf(buf, "%" PRIu64, type->get_type_id());
+  int n = snprintf(buf, sizeof buf, "%" PRIu64, type->get_type_id());
+  assert(0 < n && n < sizeof buf);
   return std::string("reflectionInitializer_") + buf;
 }
 
@@ -7185,7 +7194,16 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
   }
 
   f_reflection_impl_ <<
-    "// Reflection initializer for " << tinfo.name << endl <<
+    "// Reflection initializer for " << tinfo.name << endl;
+
+  // Reflection initializers for dependent types of structs/exceptions are
+  // only called from within this file when initializing the structs and
+  // exceptions.
+  if (!ttype->is_struct() && !ttype->is_xception()) {
+    f_reflection_impl_ << "static ";
+  }
+
+  f_reflection_impl_ <<
     "void " << initializer << "(" << ns << "Schema& schema) {" << endl;
 
   f_reflection_impl_ <<
@@ -7403,7 +7421,7 @@ string t_cpp_generator::function_signature(t_function* tfunction,
                   ? "()"
                   : ("(" + type_name(ttype) + " const& _return)"));
       if (has_xceptions) {
-        exn_cob = ", std::function<void(const std::exception& ex)> exn_cob";
+        exn_cob = ", std::function<void(const std::exception& ex)> /*exn_cob*/";
       }
     } else {
       throw "UNKNOWN STYLE";

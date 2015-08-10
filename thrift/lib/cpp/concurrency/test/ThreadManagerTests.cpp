@@ -30,7 +30,7 @@
 #include <thrift/lib/cpp/concurrency/NumaThreadManager.h>
 #include <thrift/lib/cpp/concurrency/Util.h>
 
-#include <folly/wangle/concurrent/Codel.h>
+#include <wangle/concurrent/Codel.h>
 #include <folly/Synchronized.h>
 
 using namespace boost;
@@ -43,8 +43,7 @@ using namespace apache::thrift::concurrency;
     using std::chrono::steady_clock; \
     using std::chrono::milliseconds;  \
     auto end = steady_clock::now() + milliseconds(timeout);  \
-    while ((x) != (y) && steady_clock::now() < end)  \
-      ; \
+    while ((x) != (y) && steady_clock::now() < end)  {} \
     BOOST_##OP##_EQUAL(x, y); \
   } while (0)
 

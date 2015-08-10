@@ -31,17 +31,21 @@ class FrozenFileForwardIncompatible : public std::runtime_error {
 
   int fileVersion() const { return fileVersion_; }
   int supportedVersion() const {
-    return schema::frozen_constants::kCurrentFrozenFileVersion_;
+    return schema::frozen_constants::kCurrentFrozenFileVersion();
   }
 
  private:
   int fileVersion_;
 };
 
+/**
+ * Returns the number of bytes needed to freeze the given object, not including
+ * padding bytes
+ */
 template <class T>
 size_t frozenSize(const T& v) {
   Layout<T> layout;
-  return LayoutRoot::layout(v, layout);
+  return LayoutRoot::layout(v, layout) - LayoutRoot::kPaddingBytes;
 }
 
 template <class T>
@@ -51,7 +55,7 @@ void serializeRootLayout(const Layout<T>& layout, std::string& out) {
   saveRoot(layout, memSchema);
   schema::convert(memSchema, schema);
 
-  schema.fileVersion = schema::frozen_constants::kCurrentFrozenFileVersion_;
+  schema.fileVersion = schema::frozen_constants::kCurrentFrozenFileVersion();
   util::ThriftSerializerCompact<>().serialize(schema, &out);
 }
 
@@ -62,7 +66,7 @@ void deserializeRootLayout(folly::ByteRange& range, Layout<T>& layoutOut) {
       range.begin(), range.size(), &schema);
 
   if (schema.fileVersion >
-      schema::frozen_constants::kCurrentFrozenFileVersion_) {
+      schema::frozen_constants::kCurrentFrozenFileVersion()) {
     throw FrozenFileForwardIncompatible(schema.fileVersion);
   }
 

@@ -16,8 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#ifndef THRIFT_SERVER_TNONBLOCKINGSERVEROBSERVER_H_
-#define THRIFT_SERVER_TNONBLOCKINGSERVEROBSERVER_H_ 1
+#ifndef THRIFT_SERVER_TSERVEROBSERVER_H_
+#define THRIFT_SERVER_TSERVEROBSERVER_H_ 1
 
 #include <stdint.h>
 #include <memory>
@@ -53,7 +53,6 @@ class TServerObserver {
 
   };
 
-  // Notifications for various events on the TNonblockingServer
   virtual void connAccepted() {}
 
   virtual void connDropped() {}
@@ -72,15 +71,15 @@ class TServerObserver {
 
   virtual void receivedRequest() {}
 
-  virtual void queuedRequests(int32_t numRequests) {}
+  virtual void queuedRequests(int32_t /*numRequests*/) {}
 
   virtual void queueTimeout() {}
 
   virtual void sentReply() {}
 
-  virtual void activeRequests(int32_t numRequests) {}
+  virtual void activeRequests(int32_t /*numRequests*/) {}
 
-  virtual void callCompleted(const CallTimestamps& runtimes) {}
+  virtual void callCompleted(const CallTimestamps& /*runtimes*/) {}
 
   // The observer has to specify a sample rate for callCompleted notifications
   inline uint32_t getSampleRate() const {

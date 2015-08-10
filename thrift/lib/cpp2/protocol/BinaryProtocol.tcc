@@ -43,7 +43,7 @@ uint32_t BinaryProtocolWriter::writeMessageEnd() {
   return 0;
 }
 
-uint32_t BinaryProtocolWriter::writeStructBegin(const char* name) {
+uint32_t BinaryProtocolWriter::writeStructBegin(const char* /*name*/) {
   return 0;
 }
 
@@ -51,7 +51,7 @@ uint32_t BinaryProtocolWriter::writeStructEnd() {
   return 0;
 }
 
-uint32_t BinaryProtocolWriter::writeFieldBegin(const char* name,
+uint32_t BinaryProtocolWriter::writeFieldBegin(const char* /*name*/,
                                                TType fieldType,
                                                int16_t fieldId) {
   uint32_t wsize = 0;
@@ -181,7 +181,11 @@ uint32_t BinaryProtocolWriter::writeBinary(
     throw TProtocolException(TProtocolException::SIZE_LIMIT);
   }
   uint32_t result = writeI32((int32_t)size);
-  out_.insert(str.clone());
+  auto clone = str.clone();
+  if (sharing_ != SHARE_EXTERNAL_BUFFER) {
+    clone->makeManaged();
+  }
+  out_.insert(std::move(clone));
   return result + size;
 }
 
@@ -192,7 +196,11 @@ uint32_t BinaryProtocolWriter::writeSerializedData(
   }
   // TODO: insert() just chains IOBufs together. Consider copying data to the
   // output buffer as it was already preallocated with the correct size.
-  out_.insert(buf->clone());
+  auto clone = buf->clone();
+  if (sharing_ != SHARE_EXTERNAL_BUFFER) {
+    clone->makeManaged();
+  }
+  out_.insert(std::move(clone));
   return buf->computeChainDataLength();
 }
 
@@ -206,20 +214,20 @@ uint32_t BinaryProtocolWriter::serializedMessageSize(
   return 2*serializedSizeI32() + serializedSizeString(name);
 }
 
-uint32_t BinaryProtocolWriter::serializedFieldSize(const char* name,
-                                                   TType fieldType,
-                                                   int16_t fieldId) {
+uint32_t BinaryProtocolWriter::serializedFieldSize(const char* /*name*/,
+                                                   TType /*fieldType*/,
+                                                   int16_t /*fieldId*/) {
   // byte + I16
   return serializedSizeByte() + serializedSizeI16();
 }
 
-uint32_t BinaryProtocolWriter::serializedStructSize(const char* name) {
+uint32_t BinaryProtocolWriter::serializedStructSize(const char* /*name*/) {
   return 0;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeMapBegin(TType keyType,
-                                                      TType valType,
-                                                      uint32_t size) {
+uint32_t BinaryProtocolWriter::serializedSizeMapBegin(TType /*keyType*/,
+                                                      TType /*valType*/,
+                                                      uint32_t /*size*/) {
   return serializedSizeByte() + serializedSizeByte() +
          serializedSizeI32();
 }
@@ -228,8 +236,8 @@ uint32_t BinaryProtocolWriter::serializedSizeMapEnd() {
   return 0;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeListBegin(TType elemType,
-                                                       uint32_t size) {
+uint32_t BinaryProtocolWriter::serializedSizeListBegin(TType /*elemType*/,
+                                                       uint32_t /*size*/) {
   return serializedSizeByte() + serializedSizeI32();
 }
 
@@ -237,8 +245,8 @@ uint32_t BinaryProtocolWriter::serializedSizeListEnd() {
   return 0;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeSetBegin(TType elemType,
-                                                      uint32_t size) {
+uint32_t BinaryProtocolWriter::serializedSizeSetBegin(TType /*elemType*/,
+                                                      uint32_t /*size*/) {
   return serializedSizeByte() + serializedSizeI32();
 }
 
@@ -250,31 +258,31 @@ uint32_t BinaryProtocolWriter::serializedSizeStop() {
   return 1;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeBool(bool val) {
+uint32_t BinaryProtocolWriter::serializedSizeBool(bool /*val*/) {
   return 1;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeByte(int8_t val) {
+uint32_t BinaryProtocolWriter::serializedSizeByte(int8_t /*val*/) {
   return 1;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeI16(int16_t val) {
+uint32_t BinaryProtocolWriter::serializedSizeI16(int16_t /*val*/) {
   return 2;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeI32(int32_t val) {
+uint32_t BinaryProtocolWriter::serializedSizeI32(int32_t /*val*/) {
   return 4;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeI64(int64_t val) {
+uint32_t BinaryProtocolWriter::serializedSizeI64(int64_t /*val*/) {
   return 8;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeDouble(double val) {
+uint32_t BinaryProtocolWriter::serializedSizeDouble(double /*val*/) {
   return 8;
 }
 
-uint32_t BinaryProtocolWriter::serializedSizeFloat(float val) {
+uint32_t BinaryProtocolWriter::serializedSizeFloat(float /*val*/) {
   return 4;
 }
 
@@ -299,7 +307,7 @@ uint32_t BinaryProtocolWriter::serializedSizeBinary(
 }
 
 uint32_t BinaryProtocolWriter::serializedSizeSerializedData(
-    const std::unique_ptr<IOBuf>& buf) {
+    const std::unique_ptr<IOBuf>& /*buf*/) {
   // writeSerializedData's implementation just chains IOBufs together. Thus
   // we don't expect external buffer space for it.
   return 0;
@@ -360,7 +368,7 @@ uint32_t BinaryProtocolReader::readStructEnd() {
   return 0;
 }
 
-uint32_t BinaryProtocolReader::readFieldBegin(std::string& name,
+uint32_t BinaryProtocolReader::readFieldBegin(std::string& /*name*/,
                                               TType& fieldType,
                                               int16_t& fieldId) {
   uint32_t result = 0;
@@ -515,12 +523,10 @@ uint32_t BinaryProtocolReader::readBinary(StrType& str) {
 }
 
 uint32_t BinaryProtocolReader::readBinary(std::unique_ptr<folly::IOBuf>& str) {
-  uint32_t result;
-  int32_t size;
-  result = readI32(size);
-  checkStringSize(size);
-  in_.clone(str, size);
-  return result + (uint32_t)size;
+  if (!str) {
+    str = folly::make_unique<folly::IOBuf>();
+  }
+  return readBinary(*str);
 }
 
 uint32_t BinaryProtocolReader::readBinary(folly::IOBuf& str) {
@@ -530,6 +536,9 @@ uint32_t BinaryProtocolReader::readBinary(folly::IOBuf& str) {
   checkStringSize(size);
 
   in_.clone(str, size);
+  if (sharing_ != SHARE_EXTERNAL_BUFFER) {
+    str.makeManaged();
+  }
   return result + (uint32_t)size;
 }
 
@@ -573,12 +582,18 @@ uint32_t BinaryProtocolReader::readFromPositionAndAppend(
   if (ser) {
     std::unique_ptr<IOBuf> newBuf;
     snapshot.clone(newBuf, size);
+    if (sharing_ != SHARE_EXTERNAL_BUFFER) {
+      newBuf->makeManaged();
+    }
     // IOBuf are circular, so prependChain called on head is the same as
     // appending the whole chain at the tail.
     ser->prependChain(std::move(newBuf));
   } else {
     // cut a chunk of things directly
     snapshot.clone(ser, size);
+    if (sharing_ != SHARE_EXTERNAL_BUFFER) {
+      ser->makeManaged();
+    }
   }
 
   return (uint32_t) size;

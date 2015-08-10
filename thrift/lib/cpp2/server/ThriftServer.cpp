@@ -123,7 +123,7 @@ ThriftServer::ThriftServer(const std::string& saslPolicy,
   useClientTimeout_(true),
   activeRequests_(0),
   minCompressBytes_(0),
-  isOverloaded_([]() { return false; }),
+  isOverloaded_([](const THeader* header) { return false; }),
   queueSends_(true),
   enableCodel_(false),
   stopWorkersOnStopListening_(true),
@@ -220,7 +220,7 @@ void ThriftServer::setup() {
   // Initialize event base for this thread, ensure event_init() is called
   serveEventBase_ = eventBaseManager_->getEventBase();
   // Print some libevent stats
-  LOG(INFO) << "libevent " <<
+  VLOG(1) << "libevent " <<
     TEventBase::getLibeventVersion() << " method " <<
     TEventBase::getLibeventMethod();
 
@@ -285,11 +285,12 @@ void ThriftServer::setup() {
     }
 
     if (!threadManager_) {
+      int numThreads = nPoolThreads_ > 0 ? nPoolThreads_ : nWorkers_;
       std::shared_ptr<apache::thrift::concurrency::ThreadManager>
         threadManager(new apache::thrift::concurrency::NumaThreadManager(
-                        nPoolThreads_ > 0 ? nPoolThreads_ : nWorkers_,
+                        numThreads,
                         true /*stats*/,
-                        getMaxRequests() /*maxQueueLen*/,
+                        getMaxRequests() + numThreads /*maxQueueLen*/,
                         threadStackSizeMB_));
       threadManager->enableCodel(getEnableCodel());
       if (!poolThreadName_.empty()) {
@@ -502,8 +503,9 @@ int32_t ThriftServer::getPendingCount() const {
   return count;
 }
 
-bool ThriftServer::isOverloaded(uint32_t workerActiveRequests) {
-  if (UNLIKELY(isOverloaded_())) {
+bool ThriftServer::isOverloaded(uint32_t workerActiveRequests,
+                                const THeader* header) {
+  if (UNLIKELY(isOverloaded_(header))) {
     return true;
   }
 

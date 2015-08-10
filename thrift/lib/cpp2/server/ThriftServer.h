@@ -26,8 +26,8 @@
 
 #include <folly/Memory.h>
 #include <folly/io/ShutdownSocketSet.h>
-#include <folly/wangle/bootstrap/ServerBootstrap.h>
-#include <folly/wangle/concurrent/IOThreadPoolExecutor.h>
+#include <wangle/bootstrap/ServerBootstrap.h>
+#include <wangle/concurrent/IOThreadPoolExecutor.h>
 #include <thrift/lib/cpp/async/TAsyncServerSocket.h>
 #include <thrift/lib/cpp/async/TEventBase.h>
 #include <thrift/lib/cpp/async/TEventBaseManager.h>
@@ -44,8 +44,8 @@
 #include <thrift/lib/cpp2/async/SaslServer.h>
 #include <thrift/lib/cpp2/async/HeaderServerChannel.h>
 
-#include <folly/wangle/ssl/SSLContextConfig.h>
-#include <folly/wangle/acceptor/ServerSocketConfig.h>
+#include <wangle/ssl/SSLContextConfig.h>
+#include <wangle/acceptor/ServerSocketConfig.h>
 
 namespace apache { namespace thrift {
 
@@ -225,7 +225,7 @@ class ThriftServer : public apache::thrift::server::TServer
   // request compression.
   uint32_t minCompressBytes_;
 
-  std::function<bool(void)> isOverloaded_;
+  std::function<bool(const apache::thrift::transport::THeader*)> isOverloaded_;
   std::function<int64_t(const std::string&)> getLoad_;
 
   bool queueSends_;
@@ -476,7 +476,8 @@ class ThriftServer : public apache::thrift::server::TServer
    */
   int32_t getPendingCount() const;
 
-  bool isOverloaded(uint32_t workerActiveRequests = 0);
+  bool isOverloaded(uint32_t workerActiveRequests = 0,
+                    const apache::thrift::transport::THeader* header = nullptr);
 
   // Get load percent of the server.  Must be a number between 0 and 100:
   // 0 - no load, 100-fully loaded.
@@ -989,7 +990,8 @@ class ThriftServer : public apache::thrift::server::TServer
    * Set a function which determines whether we are currently overloaded. If
    * we are, the server will return a load-shed response.
    */
-  void setIsOverloaded(std::function<bool(void)> isOverloaded) {
+  void setIsOverloaded(std::function<
+      bool(const apache::thrift::transport::THeader*)> isOverloaded) {
     isOverloaded_ = isOverloaded;
   }
 

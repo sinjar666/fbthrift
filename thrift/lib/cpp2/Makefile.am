@@ -72,6 +72,12 @@ thrift2include_server_HEADERS = \
 	server/Cpp2Worker.h \
 	server/ThriftServer.h
 
+thrift2include_utildir = $(thrift2includedir)/util
+
+thrift2include_util_HEADERS = \
+	util/ScopedServerInterfaceThread.h \
+	util/ScopedServerInterfaceThread-inl.h
+
 thrift2include_securitydir = $(thrift2includedir)/security
 
 thrift2include_security_HEADERS = \
@@ -99,6 +105,7 @@ thrift2include_protocol_HEADERS = \
 	protocol/VirtualProtocol.h
 
 libthriftcpp2_la_SOURCES = Version.cpp \
+			   GeneratedCodeHelper.cpp \
 			   async/HeaderChannel.cpp \
 			   async/HeaderClientChannel.cpp \
 			   async/HeaderServerChannel.cpp \
@@ -126,6 +133,7 @@ libthriftcpp2_la_SOURCES = Version.cpp \
 			   server/Cpp2Connection.cpp \
 			   server/Cpp2Worker.cpp \
 			   server/ThriftServer.cpp \
+			   util/ScopedServerInterfaceThread.cpp \
 			   ../cpp/EventHandlerBase.cpp \
 			   ../cpp/transport/THeaderTransport.cpp \
 			   ../cpp/util/ScopedServerThread.cpp \
@@ -139,7 +147,8 @@ libthriftcpp2_la_SOURCES = Version.cpp \
 			   ../cpp/util/kerberos/Krb5CredentialsCacheManager.cpp \
 			   ../cpp/util/kerberos/Krb5CCacheStore.cpp \
 			   ../cpp/util/kerberos/Krb5Tgts.cpp \
-                           ../cpp/concurrency/NumaThreadManager.cpp
+			   ../cpp/util/kerberos/FBKrb5GetCreds.cpp \
+			   ../cpp/concurrency/NumaThreadManager.cpp
 
 
 libthriftcpp2_la_LIBADD = \

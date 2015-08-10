@@ -24,8 +24,11 @@ namespace apache { namespace thrift {
 template <typename Result>
 class FutureCallbackBase : public RequestCallback {
   public:
-    explicit FutureCallbackBase(folly::Promise<Result>&& promise)
-          : promise_(std::move(promise)) {}
+    explicit FutureCallbackBase(
+        folly::Promise<Result>&& promise,
+        std::shared_ptr<apache::thrift::RequestChannel> channel = nullptr)
+          : promise_(std::move(promise)),
+            channel_(std::move(channel)) {}
 
     void requestSent() override{};
 
@@ -36,6 +39,7 @@ class FutureCallbackBase : public RequestCallback {
 
   protected:
     folly::Promise<Result> promise_;
+    std::shared_ptr<apache::thrift::RequestChannel> channel_;
 };
 
 template <typename Result>
@@ -44,10 +48,12 @@ class FutureCallback : public FutureCallbackBase<Result> {
     typedef folly::exception_wrapper (*Processor)(Result&,ClientReceiveState&);
 
   public:
-    FutureCallback(folly::Promise<Result>&& promise,
-                   Processor processor)
-          : FutureCallbackBase<Result>(std::move(promise)),
-            processor_(processor) {}
+    FutureCallback(
+        folly::Promise<Result>&& promise,
+        Processor processor,
+        std::shared_ptr<apache::thrift::RequestChannel> channel = nullptr)
+        : FutureCallbackBase<Result>(std::move(promise), std::move(channel)),
+          processor_(processor) {}
 
     void replyReceived(ClientReceiveState&& state) {
       CHECK(!state.isException());
@@ -65,46 +71,50 @@ class FutureCallback : public FutureCallbackBase<Result> {
     Processor processor_;
 };
 
-class OneWayFutureCallback : public FutureCallbackBase<void> {
+class OneWayFutureCallback : public FutureCallbackBase<folly::Unit> {
   public:
-    explicit OneWayFutureCallback(folly::Promise<void>&& promise)
-        : FutureCallbackBase<void>(std::move(promise)) {}
+    explicit OneWayFutureCallback(
+        folly::Promise<folly::Unit>&& promise,
+        std::shared_ptr<apache::thrift::RequestChannel> channel = nullptr)
+        : FutureCallbackBase<folly::Unit>(
+            std::move(promise), std::move(channel)) {}
 
     void requestSent() override {
       promise_.setValue();
     };
 
-    void replyReceived(ClientReceiveState&& state) override {
+    void replyReceived(ClientReceiveState&& /*state*/) override {
       CHECK(false);
     }
 };
 
 template <>
-class FutureCallback<void> : public FutureCallbackBase<void> {
-  private:
-    typedef folly::exception_wrapper (*Processor)(ClientReceiveState&);
-  public:
-    FutureCallback(folly::Promise<void>&& promise,
-                   Processor processor)
-        : FutureCallbackBase<void>(std::move(promise)),
-          processor_(processor) {}
+class FutureCallback<folly::Unit> : public FutureCallbackBase<folly::Unit> {
+ private:
+  typedef folly::exception_wrapper (*Processor)(ClientReceiveState&);
 
-    void replyReceived(ClientReceiveState&& state) override {
-      CHECK(!state.isException());
-      CHECK(state.buf());
+ public:
+  FutureCallback(
+      folly::Promise<folly::Unit>&& promise,
+      Processor processor,
+      std::shared_ptr<apache::thrift::RequestChannel> channel = nullptr)
+      : FutureCallbackBase<folly::Unit>(std::move(promise), std::move(channel)),
+        processor_(processor) {}
 
-      auto ew = processor_(state);
-      if (ew) {
-        promise_.setException(ew);
-      } else {
-        promise_.setValue();
-      }
+  void replyReceived(ClientReceiveState&& state) override {
+    CHECK(!state.isException());
+    CHECK(state.buf());
+
+    auto ew = processor_(state);
+    if (ew) {
+      promise_.setException(ew);
+    } else {
+      promise_.setValue();
     }
+  }
 
-  private:
-    Processor processor_;
+ private:
+  Processor processor_;
 };
-
-
 
 }} // Namespace
