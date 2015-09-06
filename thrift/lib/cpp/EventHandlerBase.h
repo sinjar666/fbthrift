@@ -105,6 +105,7 @@ class TProcessorEventHandler {
    */
   virtual void postRead(void* /*ctx*/,
                         const char* /*fn_name*/,
+                        apache::thrift::transport::THeader* /*header*/,
                         uint32_t /*bytes*/) {}
 
   /**
@@ -264,10 +265,10 @@ class ContextStack {
     }
   }
 
-  void postRead(uint32_t bytes) {
+  void postRead(apache::thrift::transport::THeader* header, uint32_t bytes) {
     if (handlers_) {
       for (size_t i = 0; i < handlers_->size(); i++) {
-        (*handlers_)[i]->postRead(ctxs_[i], method_, bytes);
+        (*handlers_)[i]->postRead(ctxs_[i], method_, header, bytes);
       }
     }
   }
@@ -465,16 +466,6 @@ class TClientBase : public EventHandlerBase {
               std::shared_ptr<protocol::TProtocol> inputProtocol,
               std::shared_ptr<protocol::TProtocol> outputProtocol);
 
-    const folly::SocketAddress* getPeerAddress() const override {
-      return &internalAddress_;
-    }
-
-    void reset() {
-      internalAddress_.reset();
-      address_ = nullptr;
-      cleanupUserData();
-    }
-
     std::shared_ptr<protocol::TProtocol> getInputProtocol() const override {
       return inputProtocol_;
     }
@@ -484,8 +475,6 @@ class TClientBase : public EventHandlerBase {
     }
 
    private:
-    folly::SocketAddress* address_;
-    folly::SocketAddress internalAddress_;
     std::shared_ptr<protocol::TProtocol> inputProtocol_;
     std::shared_ptr<protocol::TProtocol> outputProtocol_;
   };

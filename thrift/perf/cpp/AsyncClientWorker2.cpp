@@ -206,10 +206,25 @@ LoadTestClientPtr AsyncClientWorker2::createConnection() {
     }
     return loadClient;
   } else {
-    std::shared_ptr<TAsyncSocket> socket =
-      TAsyncSocket::newSocket(&eb_, *config->getAddress(), kTimeout);
+    std::shared_ptr<TAsyncSocket> socket;
+    if (config->useSSL()) {
+      auto sslSocket = TAsyncSSLSocket::newSocket(sslContext_, &eb_);
+      if (session_) {
+        sslSocket->setSSLSession(session_.get());
+      }
+      sslSocket->connect(nullptr, *config->getAddress(), kTimeout);
+      // Loop until connection is established and TLS handshake completes.
+      // Unlike a regular AsyncSocket which is usable even before TCP handshke
+      // completes, an SSL socket reports !good() until TLS handshake completes.
+      eb_.loop();
+      if (config->useTickets() && sslSocket->getSSLSession()) {
+        session_.reset(sslSocket->getSSLSession());
+      }
+      socket = std::move(sslSocket);
+    } else {
+      socket = TAsyncSocket::newSocket(&eb_, *config->getAddress(), kTimeout);
+    }
 
-    LoadTestAsyncClient *loadClient = nullptr;
     std::unique_ptr<
       apache::thrift::HeaderClientChannel,
       apache::thrift::async::TDelayedDestruction::Destructor> channel(
@@ -220,7 +235,7 @@ LoadTestClientPtr AsyncClientWorker2::createConnection() {
       channel->setClientType(THRIFT_FRAMED_DEPRECATED);
     }
     if (config->zlib()) {
-      channel->getHeader()->setTransform(THeader::ZLIB_TRANSFORM);
+      channel->setTransform(THeader::ZLIB_TRANSFORM);
     }
 
     if (config->SASLPolicy() == "permitted") {
@@ -249,8 +264,7 @@ LoadTestClientPtr AsyncClientWorker2::createConnection() {
           config->getAddressHostname()).str());
     }
 
-    loadClient = new LoadTestAsyncClient(std::move(channel));
-    return std::shared_ptr<LoadTestAsyncClient>(loadClient);
+    return std::make_shared<LoadTestAsyncClient>(std::move(channel));
   }
 }
 
@@ -310,6 +324,27 @@ AsyncClientWorker2::run() {
   while (MAX_LOOPS == 0 || ++loopCount < MAX_LOOPS);
 
   stopWorker();
+}
+
+void
+AsyncClientWorker2::setupSSLContext() {
+  // Sets some sane properties on the context for ticket caching.
+  SSL_CTX_set_session_cache_mode(sslContext_->getSSLCtx(),
+    SSL_SESS_CACHE_NO_INTERNAL | SSL_SESS_CACHE_CLIENT);
+
+  if (getConfig()->cert().empty() ^ getConfig()->key().empty()) {
+    throw std::runtime_error("Must supply both key and cert or none");
+  }
+
+  // set client certs if specified.
+  if (!getConfig()->cert().empty()) {
+    sslContext_->loadCertificate(
+        getConfig()->cert().c_str(),
+        "PEM");
+  }
+  if (!getConfig()->key().empty()) {
+    sslContext_->loadPrivateKey(getConfig()->key().c_str(), "PEM");
+  }
 }
 
 void AsyncRunner2::performAsyncOperation() {

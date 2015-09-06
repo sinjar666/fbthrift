@@ -18,7 +18,7 @@
 #define THRIFT_TEST_PERF_CLIENTLOADCONFIG_H_ 1
 
 #include <thrift/lib/cpp/test/loadgen/WeightedLoadConfig.h>
-#include <thrift/lib/cpp/transport/TSocketAddress.h>
+#include <folly/SocketAddress.h>
 
 namespace apache { namespace thrift {
 
@@ -108,6 +108,7 @@ class ClientLoadConfig : public loadgen::WeightedLoadConfig {
   std::string cert() const;
   std::string trustedCAList() const;
   std::string ciphers() const;
+  bool useTickets() const;
 
  private:
   uint32_t pickLogNormal(double mean, double sigma);

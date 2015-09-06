@@ -20,7 +20,7 @@
 #include <thrift/lib/cpp/async/HHWheelTimer.h>
 #include <thrift/lib/cpp/async/TEventConnection.h>
 #include <thrift/lib/cpp/concurrency/Util.h>
-#include <thrift/lib/cpp/transport/TSocketAddress.h>
+#include <folly/SocketAddress.h>
 #include <thrift/lib/cpp/TApplicationException.h>
 #include <thrift/lib/cpp2/async/HeaderServerChannel.h>
 #include <thrift/lib/cpp2/async/SaslServer.h>
@@ -40,7 +40,7 @@ namespace apache { namespace thrift {
  */
 class Cpp2Connection
     : public ResponseChannel::Callback
-    , public folly::wangle::ManagedConnection {
+    , public wangle::ManagedConnection {
  public:
 
   static const std::string loadHeader;
@@ -207,9 +207,7 @@ class Cpp2Connection
   void disconnect(const char* comment) noexcept;
 
   // Set any error headers necessary, based on the received headers
-  apache::thrift::transport::THeader::StringToStringMap setErrorHeaders(
-    const apache::thrift::transport::THeader::StringToStringMap&
-    recv_headers);
+  void setErrorHeaders(apache::thrift::transport::THeader* recv_headers);
 
   friend class Cpp2Request;
 

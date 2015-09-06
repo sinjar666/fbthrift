@@ -268,6 +268,7 @@ class t_py_generator : public t_generator {
   std::string type_to_enum(t_type* ttype);
   std::string type_to_spec_args(t_type* ttype);
   std::string get_real_py_module(const t_program* program);
+  std::string render_string(std::string value);
 
  private:
 
@@ -965,6 +966,17 @@ void t_py_generator::generate_const(t_const* tconst) {
   f_consts_ << endl << endl;
 }
 
+string t_py_generator::render_string(string value) {
+  std::ostringstream out;
+  size_t pos = 0;
+  while((pos = value.find('"', pos)) != string::npos) {
+    value.insert(pos, 1, '\\');
+    pos += 2;
+  }
+  out << "\"" << value << "\"";
+  return out.str();
+}
+
 /**
  * Prints the value of a constant with the given type. Note that type checking
  * is NOT performed in this function as it is always run beforehand using the
@@ -978,7 +990,7 @@ string t_py_generator::render_const_value(t_type* type, t_const_value* value) {
     t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
     switch (tbase) {
     case t_base_type::TYPE_STRING:
-      out << "'" << value->get_string() << "'";
+      out << render_string(value->get_string());
       break;
     case t_base_type::TYPE_BOOL:
       out << (value->get_integer() > 0 ? "True" : "False");
@@ -1442,7 +1454,7 @@ void t_py_generator::generate_py_string_dict(
   map<string, string>::const_iterator a_iter;
   indent_up();
   for (a_iter = fields.begin(); a_iter != fields.end(); ++a_iter) {
-    indent(out) << "'" << a_iter->first << "': \"\"\""
+    indent(out) << render_string(a_iter->first) << ": \"\"\""
                 << a_iter->second << "\"\"\"," << endl;
   }
   indent_down();
@@ -1668,8 +1680,8 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
 void t_py_generator::generate_fastproto_write(ofstream& out,
                                               t_struct* tstruct) {
   indent(out) <<
-    "if (oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
-    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
+    "or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and "
     "oprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
     "and self.thrift_spec is not None "
@@ -1686,8 +1698,8 @@ void t_py_generator::generate_fastproto_write(ofstream& out,
 
   indent_down();
   indent(out) <<
-    "if (oprot.__class__ == TCompactProtocol.TCompactProtocolAccelerated "
-    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(oprot, TCompactProtocol.TCompactProtocolAccelerated) "
+    "or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and "
     "oprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_COMPACT_PROTOCOL)) "
     "and self.thrift_spec is not None "
@@ -1707,8 +1719,8 @@ void t_py_generator::generate_fastproto_write(ofstream& out,
 void t_py_generator::generate_fastproto_read(ofstream& out,
                                              t_struct* tstruct) {
   indent(out) <<
-    "if (iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
-    "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
+    "or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and "
     "iprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
     "and isinstance(iprot.trans, TTransport.CReadableTransport) "
@@ -1726,8 +1738,8 @@ void t_py_generator::generate_fastproto_read(ofstream& out,
   indent_down();
 
   indent(out) <<
-    "if (iprot.__class__ == TCompactProtocol.TCompactProtocolAccelerated "
-    "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(iprot, TCompactProtocol.TCompactProtocolAccelerated) "
+    "or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and "
     "iprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_COMPACT_PROTOCOL)) "
     "and isinstance(iprot.trans, TTransport.CReadableTransport) "
@@ -1748,8 +1760,8 @@ void t_py_generator::generate_fastproto_read(ofstream& out,
 void t_py_generator::generate_fastbinary_read(ofstream& out,
                                               t_struct* tstruct) {
   indent(out) <<
-    "if (iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
-    "or (iprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
+    "or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and "
     "iprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
     "and isinstance(iprot.trans, TTransport.CReadableTransport) "
@@ -1769,8 +1781,8 @@ void t_py_generator::generate_fastbinary_read(ofstream& out,
 void t_py_generator::generate_fastbinary_write(ofstream& out,
                                                t_struct* tstruct) {
   indent(out) <<
-    "if (oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated "
-    "or (oprot.__class__ == THeaderProtocol.THeaderProtocol and "
+    "if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
+    "or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and "
     "oprot.get_protocol_id() == "
     "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
     "and self.thrift_spec is not None "
@@ -1993,10 +2005,10 @@ void t_py_generator::generate_service(t_service* tservice) {
   // Generate the three main parts of the service (well, two for now in PHP)
   generate_service_interface(tservice, false);
   generate_service_interface(tservice, true);
+  generate_service_helpers(tservice);
   generate_service_client(tservice);
   generate_service_server(tservice, false);
   generate_service_server(tservice, true);
-  generate_service_helpers(tservice);
   generate_service_remote(tservice);
   generate_service_fuzzer(tservice);
 
@@ -2334,7 +2346,15 @@ void t_py_generator::generate_service_client(t_service* tservice) {
           indent() << "d = self._reqs.pop(rseqid)" << endl;
       } else if (gen_asyncio_) {
         f_service_ <<
-          indent() << "fut = self._futures.pop(rseqid)" << endl;
+          indent() << "try:" << endl;
+        f_service_ <<
+          indent() <<
+            indent() << "fut = self._futures.pop(rseqid)" << endl;
+        f_service_ <<
+          indent() << "except KeyError:" << endl;
+        f_service_ <<
+          indent() <<
+            indent() << "return   # request timed out" << endl;
       } else {
         f_service_ <<
           indent() << "(fname, mtype, rseqid) = " <<
@@ -2723,7 +2743,9 @@ void t_py_generator::generate_process_function(t_service* tservice,
 
   // Open function
   indent(f_service_)
-    << "@process_method(oneway="
+    << "@process_method("
+    << fn_name << "_args, "
+    << "oneway="
     << (tfunction->is_oneway() ? "True" : "False")
     << (gen_twisted_ ? ", twisted=True)" : ")") << endl;
 

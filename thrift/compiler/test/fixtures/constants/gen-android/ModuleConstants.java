@@ -31,6 +31,12 @@ public class ModuleConstants {
     states.add(tmp1);
   }
 
+  public static final double x = 1;
+
+  public static final double y = (double)1000000;
+
+  public static final double z = 1e+09;
+
   public static final ModuleLogger instagram = new ModuleLogger(Module.EventType.Internship);
   static {
     instagram.addProperty(Module.Internship_weeks, 12);
@@ -49,6 +55,24 @@ public class ModuleConstants {
     tmp3.addProperty(Module.Internship_title, "Sales Intern");
     tmp3.addProperty(Module.Internship_employer, ModuleEnum.Company_FACEBOOK);
     internList.add(tmp3);
+  }
+
+  public static final String apostrophe = "'";
+
+  public static final String tripleApostrophe = "'''";
+
+  public static final String quotationMark = """;
+
+  public static final String backslash = "\\";
+
+  public static final String escaped_a = "\x61";
+
+  public static final Map<String,Integer> char2ascii = new HashMap<String,Integer>();
+  static {
+    char2ascii.put("'", 39);
+    char2ascii.put(""", 34);
+    char2ascii.put("\\", 92);
+    char2ascii.put("\x61", 97);
   }
 
 }

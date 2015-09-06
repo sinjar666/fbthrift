@@ -43,7 +43,7 @@ class ThriftServer;
  * typically be around one Cpp2Worker thread per core.
  */
 class Cpp2Worker
-    : public folly::Acceptor {
+    : public wangle::Acceptor {
  public:
 
   /**
@@ -108,9 +108,10 @@ class Cpp2Worker
   apache::thrift::async::TEventBase* eventBase_;
 
   void onNewConnection(folly::AsyncSocket::UniquePtr,
-                       const apache::thrift::transport::TSocketAddress*,
+                       const folly::SocketAddress*,
                        const std::string&,
-                       const folly::TransportInfo&) override;
+                       SecureTransportType,
+                       const wangle::TransportInfo&) override;
 
   folly::AsyncSocket::UniquePtr makeNewAsyncSocket(folly::EventBase* base,
                                                    int fd) override {
@@ -122,7 +123,12 @@ class Cpp2Worker
       folly::EventBase* base,
       int fd) override {
     return folly::AsyncSSLSocket::UniquePtr(
-      new apache::thrift::async::TAsyncSSLSocket(ctx, base, fd));
+        new apache::thrift::async::TAsyncSSLSocket(
+          ctx,
+          base,
+          fd,
+          true, /* set server */
+          true /* defer the security negotiation until sslAccept. */));
   }
 
   /**

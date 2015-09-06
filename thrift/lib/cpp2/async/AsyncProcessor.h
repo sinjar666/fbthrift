@@ -148,7 +148,7 @@ class GeneratedAsyncProcessor : public AsyncProcessor {
     c->onReadData(smsg);
     uint32_t bytes = ::apache::thrift::Cpp2Ops<Args>::read(iprot, &args);
     iprot->readMessageEnd();
-    c->postRead(bytes);
+    c->postRead(nullptr, bytes);
   }
 
   template <typename ProtocolOut, typename Result>
@@ -453,9 +453,10 @@ class HandlerCallbackBase {
     // Do any compression or other transforms in this thread, the same thread
     // that serialization happens on.
     queue.append(
-      transport::THeader::transform(queue.move(),
-                                    reqCtx_->getTransforms(),
-                                    reqCtx_->getMinCompressBytes()));
+      transport::THeader::transform(
+        queue.move(),
+        reqCtx_->getHeader()->getWriteTransforms(),
+        reqCtx_->getHeader()->getMinCompressBytes()));
   }
 
   // Can be called from IO or TM thread
@@ -719,7 +720,7 @@ class HandlerCallback<void> : public HandlerCallbackBase {
 template <typename T>
 class StreamingHandlerCallback :
     public HandlerCallbackBase,
-    public folly::wangle::Observer<typename detail::inner_type<T>::type> {
+    public wangle::Observer<typename detail::inner_type<T>::type> {
 public:
   typedef typename detail::inner_type<T>::type ResultType;
 
@@ -776,7 +777,7 @@ public:
     done();
   }
 
-  void onError(folly::wangle::Error e) override {
+  void onError(wangle::Error e) override {
     exception(e);
   }
  private:

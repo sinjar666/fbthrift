@@ -39,9 +39,16 @@
 
 namespace apache { namespace thrift {
 
+using apache::thrift::transport::THeader;
+
 class Cpp2Channel
   : public MessageChannel
-  , public folly::wangle::BytesToBytesHandler
+  , public wangle::Handler<
+        std::pair<std::unique_ptr<folly::IOBuf>, std::unique_ptr<THeader>>,
+        int, // last inbound handler so this doesn't matter
+        // Does nothing when writing
+        std::pair<std::unique_ptr<folly::IOBuf>, THeader*>,
+        std::pair<std::unique_ptr<folly::IOBuf>, THeader*>>
  {
  public:
   explicit Cpp2Channel(
@@ -49,7 +56,7 @@ class Cpp2Channel
     std::unique_ptr<FramingHandler> framingHandler,
     std::unique_ptr<ProtectionHandler> protectionHandler = nullptr);
 
-  // TODO(jsedgwick) This should be protected, but folly::wangle::StaticPipeline
+  // TODO(jsedgwick) This should be protected, but wangle::StaticPipeline
   // will encase this in a folly::Optional, which requires a public destructor.
   // Need to add a static_assert to Optional to make that prereq clearer
   ~Cpp2Channel() override {}
@@ -69,6 +76,7 @@ class Cpp2Channel
   void setTransport(
       const std::shared_ptr<async::TAsyncTransport>& transport) {
     transport_ = transport;
+    transportHandler_->setTransport(transport);
   }
   async::TAsyncTransport* getTransport() {
     return transport_.get();
@@ -78,10 +86,19 @@ class Cpp2Channel
   void destroy() override;
 
   // BytesToBytesHandler methods
-  void read(Context* ctx, folly::IOBufQueue& q) override;
+  void read(Context* ctx,
+            std::pair<std::unique_ptr<folly::IOBuf>,
+                      std::unique_ptr<THeader>> bufAndHeader) override;
   void readEOF(Context* ctx) override;
   void readException(Context* ctx, folly::exception_wrapper e) override;
   folly::Future<folly::Unit> close(Context* ctx) override;
+
+  folly::Future<folly::Unit> write(
+      Context* ctx,
+      std::pair<std::unique_ptr<folly::IOBuf>, THeader*> bufAndHeader) override
+  {
+    return ctx->fireWrite(std::move(bufAndHeader));
+  }
 
   void writeSuccess() noexcept;
   void writeError(size_t bytesWritten,
@@ -92,7 +109,8 @@ class Cpp2Channel
 
   // Interface from MessageChannel
   void sendMessage(SendCallback* callback,
-                   std::unique_ptr<folly::IOBuf>&& buf) override;
+                   std::unique_ptr<folly::IOBuf>&& buf,
+                   apache::thrift::transport::THeader* header) override;
   void setReceiveCallback(RecvCallback* callback) override;
 
   // event base methods
@@ -105,7 +123,7 @@ class Cpp2Channel
   // minor latency increase.
   void setQueueSends(bool queueSends) {
     if (pipeline_) {
-      pipeline_->getHandler<folly::wangle::OutputBufferingHandler>(1)->queueSends_ = queueSends;
+      pipeline_->getHandler<wangle::OutputBufferingHandler>(1)->queueSends_ = queueSends;
     }
   }
 
@@ -130,10 +148,12 @@ private:
   std::shared_ptr<ProtectionHandler> protectionHandler_;
   std::shared_ptr<FramingHandler> framingHandler_;
 
-  typedef folly::wangle::StaticPipeline<
-    folly::IOBufQueue&, std::unique_ptr<folly::IOBuf>,
+  typedef wangle::StaticPipeline<
+    folly::IOBufQueue&,
+    std::pair<std::unique_ptr<folly::IOBuf>,
+              apache::thrift::transport::THeader*>,
     TAsyncTransportHandler,
-    folly::wangle::OutputBufferingHandler,
+    wangle::OutputBufferingHandler,
     ProtectionHandler,
     FramingHandler,
     Cpp2Channel>

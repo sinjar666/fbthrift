@@ -2,6 +2,7 @@
 # @lint-avoid-python-3-compatibility-imports
 
 import asyncio
+from collections import defaultdict
 import functools
 import logging
 from io import BytesIO
@@ -9,8 +10,8 @@ import struct
 import warnings
 
 from .TServer import TServer, TServerEventHandler, TConnectionContext
-from thrift.Thrift import TProcessor
-from thrift.transport.TTransport import TMemoryBuffer, TTransportException
+from thrift.Thrift import TProcessor, TMessageType, TApplicationException
+from thrift.transport.TTransport import TTransportBase, TTransportException
 from thrift.transport.THeaderTransport import THeaderTransport
 from thrift.protocol.THeaderProtocol import (
     THeaderProtocol,
@@ -104,9 +105,9 @@ def ThriftAsyncServerFactory(
     return server
 
 
-def ThriftClientProtocolFactory(client_class, loop=None):
+def ThriftClientProtocolFactory(client_class, loop=None, timeouts=None):
     return functools.partial(
-        ThriftHeaderClientProtocol, client_class, loop,
+        ThriftHeaderClientProtocol, client_class, loop, timeouts,
     )
 
 
@@ -155,6 +156,7 @@ class FramedProtocol(asyncio.Protocol):
             self.recvd = self.recvd[4 + length:]
             self.loop.create_task(self.message_received(frame))
 
+    @asyncio.coroutine
     def message_received(self, frame):
         raise NotImplementedError
 
@@ -193,30 +195,99 @@ class SenderTransport:
                 producer.cancel()
 
 
-class WrappedTransport(TMemoryBuffer):
+class TReadOnlyBuffer(TTransportBase):
+    """Leaner version of TMemoryBuffer that is resettable."""
 
-    def __init__(self, trans):
+    def __init__(self, value=b""):
+        self._open = True
+        self._value = value
+        self.reset()
+
+    def isOpen(self):
+        return self._open
+
+    def close(self):
+        self._io.close()
+        self._open = False
+
+    def read(self, sz):
+        return self._io.read(sz)
+
+    def write(self, buf):
+        raise PermissionError("This is a read-only buffer")
+
+    def reset(self):
+        self._io = BytesIO(self._value)
+
+
+class TWriteOnlyBuffer(TTransportBase):
+    """Leaner version of TMemoryBuffer that is resettable."""
+
+    def __init__(self):
+        self._open = True
+        self.reset()
+
+    def isOpen(self):
+        return self._open
+
+    def close(self):
+        self._io.close()
+        self._open = False
+
+    def read(self, sz):
+        raise EOFError("This is a write-only buffer")
+
+    def write(self, buf):
+        self._io.write(buf)
+
+    def getvalue(self):
+        return self._io.getvalue()
+
+    def reset(self):
+        self._io = BytesIO()
+
+
+class WrappedTransport(TWriteOnlyBuffer):
+
+    def __init__(self, trans, proto):
         super().__init__()
         self._trans = trans
+        self._proto = proto
 
     def flush(self):
-        self._trans.send_message(self._writeBuffer.getvalue())
-        self._writeBuffer = BytesIO()
+        msg = self.getvalue()
+        tmi = TReadOnlyBuffer(msg)
+        iprot = THeaderProtocol(tmi)
+        fname, mtype, seqid = iprot.readMessageBegin()
+        fname = fname.decode()
+        self._proto.schedule_timeout(fname, seqid)
+        self._trans.send_message(msg)
+        self.reset()
 
 
 class WrappedTransportFactory:
+    def __init__(self, proto):
+        self._proto = proto
 
     def getTransport(self, trans):
-        return WrappedTransport(trans)
+        return WrappedTransport(trans, self._proto)
 
 
 class ThriftHeaderClientProtocol(FramedProtocol):
+    DEFAULT_TIMEOUT = 60.0
+    _exception_serializer = None
 
-    def __init__(self, client_class, loop=None):
+    def __init__(self, client_class, loop=None, timeouts=None):
         super().__init__(loop=loop)
         self._client_class = client_class
         self.client = None
         self.transport = None
+        if timeouts is None:
+            timeouts = {}
+        default_timeout = timeouts.get('') or self.DEFAULT_TIMEOUT
+        self.timeouts = defaultdict(lambda: default_timeout)
+        self.timeouts.update(timeouts)
+        self.pending_tasks = {}
 
     def connection_made(self, transport):
         assert self.transport is None, "Transport already instantiated here."
@@ -227,7 +298,7 @@ class ThriftHeaderClientProtocol(FramedProtocol):
         self.thrift_transport = SenderTransport(self.transport, self.loop)
         self.client = self._client_class(
             self.thrift_transport,
-            WrappedTransportFactory(),
+            WrappedTransportFactory(self),
             THeaderProtocolFactory())
 
     def connection_lost(self, exc):
@@ -238,24 +309,87 @@ class ThriftHeaderClientProtocol(FramedProtocol):
             if not fut.done():
                 fut.set_exception(te)
 
+    def update_pending_tasks(self, seqid, task):
+        no_longer_pending = [
+            _seqid for _seqid, _task in self.pending_tasks.items()
+            if _task.done() or _task.cancelled()
+        ]
+        for _seqid in no_longer_pending:
+            del self.pending_tasks[_seqid]
+        assert seqid not in self.pending_tasks, (
+            "seqid already pending for timeout"
+        )
+        self.pending_tasks[seqid] = task
+
+    def schedule_timeout(self, fname, seqid):
+        timeout = self.timeouts[fname]
+        if not timeout:
+            return
+
+        exc = TApplicationException(
+            TApplicationException.TIMEOUT, "Call to {} timed out".format(fname)
+        )
+        serialized_exc = self.serialize_texception(fname, seqid, exc)
+        timeout_task = self.loop.create_task(
+            self.message_received(serialized_exc, delay=timeout),
+        )
+        self.update_pending_tasks(seqid, timeout_task)
+
     @asyncio.coroutine
-    def message_received(self, frame):
-        tmi = TMemoryBuffer(frame)
+    def message_received(self, frame, delay=0):
+        tmi = TReadOnlyBuffer(frame)
         iprot = THeaderProtocol(tmi)
         (fname, mtype, rseqid) = iprot.readMessageBegin()
+
+        if delay:
+            yield from asyncio.sleep(delay)
+        else:
+            try:
+                timeout_task = self.pending_tasks.pop(rseqid)
+            except KeyError:
+                # Task doesn't have a timeout or has already been cancelled
+                # and pruned from `pending_tasks`.
+                pass
+            else:
+                timeout_task.cancel()
 
         method = getattr(self.client, "recv_" + fname.decode(), None)
         if method is None:
             logger.error("Method %r is not supported", method)
-            self.transport.close()
+            self.transport.abort()
         else:
             method(iprot, mtype, rseqid)
 
     def close(self):
-        # This is sadly necessary now because of the async tasks scheduled
-        # by SenderTransport.
-        self.transport.close()
+        for task in self.pending_tasks.values():
+            if not task.done() and not task.cancelled():
+                task.cancel()
+        self.transport.abort()
         self.thrift_transport.close()
+
+    @classmethod
+    def serialize_texception(cls, fname, seqid, exception):
+        """This saves us a bit of processing time for timeout handling by
+        reusing the Thrift structs involved in exception serialization.
+
+        NOTE: this is not thread-safe nor is it meant to be.
+        """
+        # the serializer is a singleton
+        if cls._exception_serializer is None:
+            buffer = TWriteOnlyBuffer()
+            transport = THeaderTransport(buffer)
+            cls._exception_serializer = THeaderProtocol(transport)
+        else:
+            transport = cls._exception_serializer.trans
+            buffer = transport.getTransport()
+            buffer.reset()
+
+        serializer = cls._exception_serializer
+        serializer.writeMessageBegin(fname, TMessageType.EXCEPTION, seqid)
+        exception.write(serializer)
+        serializer.writeMessageEnd()
+        serializer.trans.flush()
+        return buffer.getvalue()
 
 
 class ThriftHeaderServerProtocol(FramedProtocol):
@@ -275,14 +409,16 @@ class ThriftHeaderServerProtocol(FramedProtocol):
             THeaderTransport.FRAMED_DEPRECATED,
         }
 
-        tm = TMemoryBuffer(frame)
-        prot = THeaderProtocol(tm, client_types=client_types)
+        ibuf = TReadOnlyBuffer(frame)
+        iprot = THeaderProtocol(ibuf, client_types=client_types)
+        obuf = TWriteOnlyBuffer()
+        oprot = THeaderProtocol(obuf, client_types=client_types)
 
         try:
             yield from self.processor.process(
-                prot, prot, self.server_context,
+                iprot, oprot, self.server_context,
             )
-            msg = tm.getvalue()
+            msg = obuf.getvalue()
             if len(msg) > 0:
                 self.transport.write(msg)
         except Exception:

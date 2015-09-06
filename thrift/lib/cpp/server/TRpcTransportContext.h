@@ -18,7 +18,7 @@
 #define THRIFT_SERVER_TRPCTRANSPORTCONTEXT_H_ 1
 
 #include <thrift/lib/cpp/server/TConnectionContext.h>
-#include <thrift/lib/cpp/transport/TSocketAddress.h>
+#include <folly/SocketAddress.h>
 
 #include <memory>
 
@@ -32,7 +32,8 @@ namespace server {
 
 class TRpcTransportContext : public TConnectionContext {
  public:
-  TRpcTransportContext(std::shared_ptr<transport::TRpcTransport> transport)
+  explicit TRpcTransportContext(
+      std::shared_ptr<transport::TRpcTransport> transport)
     : transport_(transport) {}
 
   TRpcTransportContext(

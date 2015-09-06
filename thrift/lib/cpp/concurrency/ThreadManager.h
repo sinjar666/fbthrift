@@ -17,11 +17,13 @@
 #ifndef _THRIFT_CONCURRENCY_THREADMANAGER_H_
 #define _THRIFT_CONCURRENCY_THREADMANAGER_H_ 1
 
-#include <memory>
-#include <functional>
 #include <sys/types.h>
-#include <array>
 #include <unistd.h>
+
+#include <array>
+#include <functional>
+#include <memory>
+
 #include <folly/Executor.h>
 #include <folly/LifoSem.h>
 #include <folly/RWSpinLock.h>
@@ -174,11 +176,16 @@ class ThreadManager : public folly::Executor {
    * @throws TooManyPendingTasksException Pending task count exceeds max
    * pending task count
    */
-  virtual void add(std::shared_ptr<Runnable>task,
-                   int64_t timeout=0LL,
-                   int64_t expiration=0LL,
+  virtual void add(std::shared_ptr<Runnable> task,
+                   int64_t timeout = 0,
+                   int64_t expiration = 0,
                    bool cancellable = false,
                    bool numa = false) = 0;
+
+  /**
+   * Similar to add(), but doesn't block or throw.
+   */
+  virtual bool tryAdd(std::shared_ptr<Runnable> task) = 0;
 
   /**
    * Implements folly::Executor::add()
@@ -254,7 +261,7 @@ class ThreadManager : public folly::Executor {
 
   virtual void enableCodel(bool) = 0;
 
-  virtual folly::wangle::Codel* getCodel() = 0;
+  virtual wangle::Codel* getCodel() = 0;
 
   template <typename SemType>
   class ImplT;
@@ -279,7 +286,7 @@ class ThreadManager : public folly::Executor {
  * make sense in the priority world.
  */
 class PriorityThreadManager : public ThreadManager {
-public:
+ public:
   typedef apache::thrift::concurrency::PRIORITY PRIORITY;
 
   using ThreadManager::addWorker;
@@ -290,28 +297,44 @@ public:
 
   using ThreadManager::add;
   virtual void add(PRIORITY priority,
-                   std::shared_ptr<Runnable>task,
-                   int64_t timeout=0LL,
-                   int64_t expiration=0LL,
+                   std::shared_ptr<Runnable> task,
+                   int64_t timeout = 0,
+                   int64_t expiration = 0,
                    bool cancellable = false,
                    bool numa = false) = 0;
+
+  using ThreadManager::tryAdd;
+  virtual bool tryAdd(PRIORITY priority, std::shared_ptr<Runnable> task) = 0;
 
   virtual uint8_t getNumPriorities() const override {
     return N_PRIORITIES;
   }
 
   using ThreadManager::getCodel;
-  virtual folly::wangle::Codel* getCodel(PRIORITY priority) = 0;
+  virtual wangle::Codel* getCodel(PRIORITY priority) = 0;
+
+  /**
+   * Creates a priority-aware thread manager given thread factory and size for
+   * each priority.
+   *
+   * At least NORMAL_PRIORITY_MINIMUM_THREADS threads are created for
+   * priority NORMAL.
+   */
+  template <typename SemType = folly::LifoSem>
+  static std::shared_ptr<PriorityThreadManager>
+    newPriorityThreadManager(
+        const std::array<std::pair<std::shared_ptr<ThreadFactory>, size_t>,
+                         N_PRIORITIES>& counts,
+        bool enableTaskStats = false,
+        size_t maxQueueLen = 0);
 
   /**
    * Creates a priority-aware thread manager that uses counts[X]
    * worker threads for priority X.
-   * Atleast NORMAL_PRIORITY_MINIMUM_THREADS threads are created for
-   * priority NORMAL
    */
   template <typename SemType = folly::LifoSem>
   static std::shared_ptr<PriorityThreadManager>
-    newPriorityThreadManager(std::array<size_t, N_PRIORITIES> counts,
+    newPriorityThreadManager(const std::array<size_t, N_PRIORITIES>& counts,
                              bool enableTaskStats = false,
                              size_t maxQueueLen = 0);
 
@@ -365,13 +388,15 @@ class ThreadManagerExecutorAdapter : public ThreadManager {
   size_t expiredTaskCount() override { return 0; }
 
   void add(std::shared_ptr<Runnable> task,
-           int64_t /*timeout*/ = 0LL,
-           int64_t /*expiration*/ = 0LL,
+           int64_t /*timeout*/ = 0,
+           int64_t /*expiration*/ = 0,
            bool /*cancellable*/ = false,
            bool /*numa*/ = false) override {
-    exe_->add([=]() {
-      task->run();
-    });
+    exe_->add([=] { task->run(); });
+  }
+  bool tryAdd(std::shared_ptr<Runnable> task) override {
+    add(std::move(task));
+    return true;
   }
   void add(folly::Func f) override { exe_->add(std::move(f)); }
 
@@ -382,7 +407,7 @@ class ThreadManagerExecutorAdapter : public ThreadManager {
   void setCodelCallback(ExpireCallback /*expireCallback*/) override {}
   void setThreadInitCallback(InitCallback /*initCallback*/) override {}
   void enableCodel(bool) override {}
-  folly::wangle::Codel* getCodel() override { return nullptr; }
+  wangle::Codel* getCodel() override { return nullptr; }
 
  private:
   std::shared_ptr<folly::Executor> exe_;

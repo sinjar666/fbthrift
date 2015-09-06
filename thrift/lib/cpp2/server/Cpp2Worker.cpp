@@ -49,9 +49,10 @@ using apache::thrift::concurrency::Util;
 
 void Cpp2Worker::onNewConnection(
   folly::AsyncSocket::UniquePtr sock,
-  const apache::thrift::transport::TSocketAddress* addr,
+  const folly::SocketAddress* addr,
   const std::string& nextProtocolName,
-  const folly::TransportInfo& tinfo) {
+  SecureTransportType secureProtocolType,
+  const wangle::TransportInfo& tinfo) {
 
   auto observer = server_->getObserver();
   if (server_->maxConnections_ > 0 &&
@@ -108,7 +109,7 @@ int Cpp2Worker::pendingCount() {
       pendingTime_ = now + std::chrono::milliseconds(FLAGS_pending_interval);
       pendingCount_ = 0;
       Acceptor::getConnectionManager()->iterateConns(
-          [&](folly::wangle::ManagedConnection* connection) {
+          [&](wangle::ManagedConnection* connection) {
         if ((static_cast<Cpp2Connection*>(connection))->pending()) {
           pendingCount_++;
         }

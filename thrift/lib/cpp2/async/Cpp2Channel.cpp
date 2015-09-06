@@ -52,7 +52,7 @@ Cpp2Channel::Cpp2Channel(
   framingHandler_->setProtectionHandler(protectionHandler_.get());
   pipeline_.reset(new Pipeline(
       TAsyncTransportHandler(transport),
-      folly::wangle::OutputBufferingHandler(),
+      wangle::OutputBufferingHandler(),
       protectionHandler_,
       framingHandler_,
       this));
@@ -67,7 +67,12 @@ Cpp2Channel::Cpp2Channel(
 
 folly::Future<folly::Unit> Cpp2Channel::close(Context* ctx) {
   DestructorGuard dg(this);
-  processReadEOF();
+  if (transport_) {
+    // If transport is taken over, no need to call processReadEOF. This can
+    // happen when processing HTTP GET request, where the ownership of the
+    // socket is transferred to GetHandler.
+    processReadEOF();
+  }
   return ctx->fireClose();
 }
 
@@ -76,9 +81,7 @@ void Cpp2Channel::closeNow() {
   DestructorGuard dg(this);
 
   if (pipeline_) {
-    if (transport_) {
-      pipeline_->close();
-    }
+    pipeline_->close();
   }
 
   // Note that close() above might kill the pipeline_, so let's check again.
@@ -105,7 +108,10 @@ TEventBase* Cpp2Channel::getEventBase() {
   return transport_->getEventBase();
 }
 
-void Cpp2Channel::read(Context* ctx, folly::IOBufQueue& q) {
+void Cpp2Channel::read(
+    Context* ctx,
+    std::pair<std::unique_ptr<folly::IOBuf>,
+              std::unique_ptr<THeader>> bufAndHeader) {
   DestructorGuard dg(this);
 
   if (recvCallback_ && recvCallback_->shouldSample() && !sample_) {
@@ -114,7 +120,7 @@ void Cpp2Channel::read(Context* ctx, folly::IOBufQueue& q) {
   }
 
   if (!recvCallback_) {
-    LOG(INFO) << "Received a message, but no recvCallback_ installed!";
+    VLOG(5) << "Received a message, but no recvCallback_ installed!";
     return;
   }
 
@@ -122,7 +128,9 @@ void Cpp2Channel::read(Context* ctx, folly::IOBufQueue& q) {
     sample_->readEnd = Util::currentTimeUsec();
   }
 
-  recvCallback_->messageReceived(q.move(), std::move(sample_));
+  recvCallback_->messageReceived(std::move(bufAndHeader.first),
+                                 std::move(bufAndHeader.second),
+                                 std::move(sample_));
 }
 
 void Cpp2Channel::readEOF(Context* ctx) {
@@ -177,7 +185,8 @@ void Cpp2Channel::processReadEOF() noexcept {
 
 // Low level interface
 void Cpp2Channel::sendMessage(SendCallback* callback,
-                                std::unique_ptr<folly::IOBuf>&& buf) {
+                              std::unique_ptr<folly::IOBuf>&& buf,
+                              apache::thrift::transport::THeader* header) {
   // Callback may be null.
   assert(buf);
 
@@ -199,7 +208,7 @@ void Cpp2Channel::sendMessage(SendCallback* callback,
 
   DestructorGuard dg(this);
 
-  auto future = pipeline_->write(std::move(buf));
+  auto future = pipeline_->write(std::make_pair(std::move(buf), header));
   future.then([this,dg](folly::Try<folly::Unit>&& t) {
     if (t.withException<TTransportException>(
           [&](const TTransportException& ex) {

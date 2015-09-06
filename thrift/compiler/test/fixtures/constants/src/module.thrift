@@ -4,6 +4,9 @@ const list<map<string, i32>> states = [
   {"San Diego": 3211000, "Sacramento": 479600, "SF": 837400},
   {"New York": 8406000, "Albany": 98400}
 ];
+const double x = 1.0;
+const double y = 1000000;
+const double z = 1000000000.0;
 
 enum City { NYC, MPK, SEA, LON }
 enum Company { FACEBOOK, WHATSAPP, OCULUS, INSTAGRAM }
@@ -28,3 +31,16 @@ const list<Internship> internList = [
     "employer": Company.FACEBOOK
   }
 ];
+
+const string apostrophe = "'";
+const string tripleApostrophe = "'''";
+const string quotationMark = '"'; //" //fix syntax highlighting
+const string backslash = "\\";
+const string escaped_a = "\x61";
+
+const map<string, i32> char2ascii = {
+  "'": 39,
+  '"': 34,
+  "\\": 92,
+  "\x61": 97,
+};

@@ -324,6 +324,7 @@ class t_cpp_generator : public t_oop_generator {
   std::string type_to_enum(t_type* ttype);
   bool try_terse_write_predicate(ofstream& out, t_field* t, bool pointers, TerseWrites terse_writes,
                                  string& predicate);
+  std::string render_string(std::string value);
 
   void generate_enum_constant_list(std::ofstream& f,
                                    const std::vector<t_enum_value*>& constants,
@@ -1307,6 +1308,17 @@ string t_cpp_generator::get_type_access_suffix(t_type* type) {
   return "";
 }
 
+string t_cpp_generator::render_string(string value) {
+  std::ostringstream out;
+  size_t pos = 0;
+  while((pos = value.find('"', pos)) != string::npos) {
+    value.insert(pos, 1, '\\');
+    pos += 2;
+  }
+  out << "\"" << value << "\"";
+  return out.str();
+}
+
 /**
  *
  */
@@ -1338,7 +1350,7 @@ string t_cpp_generator::render_const_value(
     t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
     switch (tbase) {
     case t_base_type::TYPE_STRING:
-      render << "\"" + value->get_string() + "\"";
+      render << render_string(value->get_string());
       break;
     case t_base_type::TYPE_BOOL:
       render << ((value->get_integer() > 0) ? "true" : "false");
@@ -5037,7 +5049,7 @@ void t_cpp_generator::generate_service_client(t_service* tservice, string style)
           indent() << _this << "iprot_->readMessageEnd();" << endl <<
           indent() << "uint32_t bytes = " << _this
                    << "iprot_->getTransport()->readEnd();" << endl <<
-          indent() << "if (ctx) ctx->postRead(bytes);" << endl;
+          indent() << "if (ctx) ctx->postRead(nullptr, bytes);" << endl;
 
         // Careful, only look for _result if not a void function
         if (!(*f_iter)->get_returntype()->is_void()) {
@@ -5845,7 +5857,7 @@ void t_cpp_generator::generate_process_function(t_service* tservice,
       indent() << "iprot->readMessageEnd();" << endl <<
       indent() << "uint32_t bytes = iprot->getTransport()->readEnd();"
                << endl << endl <<
-      indent() << "if (ctx) ctx->postRead(bytes);" << endl << endl;
+      indent() << "if (ctx) ctx->postRead(nullptr, bytes);" << endl << endl;
 
     // Declare result
     if (!tfunction->is_oneway()) {
@@ -6020,7 +6032,7 @@ void t_cpp_generator::generate_process_function(t_service* tservice,
       indent() << "iprot->readMessageEnd();" << endl <<
       indent() << "uint32_t bytes = iprot->getTransport()->readEnd();" <<
         endl <<
-      indent() << "if (ctx) ctx->postRead(bytes);" << endl << endl;
+      indent() << "if (ctx) ctx->postRead(nullptr, bytes);" << endl << endl;
     scope_down(out);
 
     // TODO(dreiss): Handle TExceptions?  Expose to server?
