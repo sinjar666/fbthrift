@@ -27,8 +27,8 @@
 #include <errno.h>
 #include <sys/stat.h>
 
-#include "thrift/compiler/platform.h"
-#include "thrift/compiler/generate/t_oop_generator.h"
+#include <thrift/compiler/platform.h>
+#include <thrift/compiler/generate/t_oop_generator.h>
 
 #include <folly/Conv.h>
 #include <folly/Format.h>
@@ -64,7 +64,7 @@ class t_cpp_generator : public t_oop_generator {
   t_cpp_generator(
       t_program* program,
       const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::string& /*option_string*/)
     : t_oop_generator(program)
   {
     std::map<std::string, std::string>::const_iterator iter;
@@ -372,9 +372,9 @@ class t_cpp_generator : public t_oop_generator {
   std::string get_include_prefix(const t_program& program) const;
 
   /**
-   * Returns an include guard using namespace, program name and suffix
+   * Returns an include guard.
    */
-  string get_include_guard(const char* suffix) const;
+  string get_include_guard() const;
 
   /**
    * True iff we should generate a function parse json to thrift object.
@@ -556,10 +556,10 @@ void t_cpp_generator::init_generator() {
     autogen_comment();
 
   // Start ifndef
-  f_types_ << get_include_guard("_TYPES_H");
-  f_types_tcc_ << get_include_guard("_TYPES_TCC");
+  f_types_ << get_include_guard();
+  f_types_tcc_ << get_include_guard();
 
-  f_reflection_ << get_include_guard("_REFLECTION_H");
+  f_reflection_ << get_include_guard();
 
   // Include base types
   f_types_ <<
@@ -576,7 +576,7 @@ void t_cpp_generator::init_generator() {
   }
 
   if (frozen2_) {
-    f_types_layouts_ << get_include_guard("_LAYOUTS_H") << endl
+    f_types_layouts_ << get_include_guard() << endl
                      << "#include <thrift/lib/cpp2/frozen/Frozen.h>" << endl
                      << "#include \"" << get_include_prefix(*get_program())
                      << program_name_ << "_types.h\"" << endl;
@@ -740,21 +740,11 @@ void t_cpp_generator::close_generator() {
       endl;
   }
 
-  // Close ifndef
-  f_types_ <<
-    "#endif" << endl;
-  f_types_tcc_ <<
-    "#endif" << endl;
-
-  f_reflection_ <<
-    "#endif" << endl;
-
   // Close output file
   if (frozen2_) {
     f_types_layouts_
       << endl
-      << "}}} // apache::thrift::frozen " << endl
-      << "#endif" << endl;
+      << "}}} // apache::thrift::frozen " << endl;
     f_types_layouts_impl_
       << endl
       << "}}} // apache::thrift::frozen " << endl;
@@ -910,12 +900,12 @@ void t_cpp_generator::generate_enum(t_enum* tenum) {
      Generate a character array of enum names for debugging purposes.
   */
   f_types_impl_ <<
-    indent() << value_type << " _k" << name << "Values[] =";
+    indent() << "const " << value_type << " _k" << name << "Values[] =";
   generate_enum_constant_list(
       f_types_impl_, constants, false, false, typed_prefix);
 
   f_types_impl_ <<
-    indent() << "const char* _k" << name << "Names[] =";
+    indent() << "const char* const _k" << name << "Names[] =";
   generate_enum_constant_list(
       f_types_impl_, constants, true, false, typed_prefix);
 
@@ -1008,7 +998,7 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     autogen_comment();
 
   // Start ifndef
-  f_consts << get_include_guard("_CONSTANTS_H") <<
+  f_consts << get_include_guard() <<
     "#include \"" << get_include_prefix(*get_program()) << program_name_ <<
     "_types.h\"" << endl <<
     endl <<
@@ -1022,8 +1012,9 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     ns_open_ << endl <<
     endl;
 
+  string consts_struct = program_name_ + "_constants";
   // DECLARATIONS
-  f_consts << "struct " << program_name_ << "_constants {" << endl;
+  f_consts << "struct " << consts_struct << " {" << endl;
   vector<t_const*>::iterator c_iter;
   indent_up();
   for (c_iter = consts.begin(); c_iter != consts.end(); ++c_iter) {
@@ -1057,13 +1048,12 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
       f_consts << "constexpr ";
     }
     if (type->is_string()) {
-      f_consts << "char const *";
+      f_consts << "char const* ";
     } else {
       f_consts << type_name(type) << ' ';
     }
-    f_consts << "const ";
     if (!inlined) {
-      f_consts << '&';
+      f_consts << "const& ";
     }
     f_consts << name << "()";
     if (inlined) {
@@ -1131,14 +1121,14 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     if (inlined) {
       f_consts << "constexpr ";
     }
-    f_consts << type_name(type) << " const ";
+    f_consts << type_name(type) << " ";
     if (!inlined) {
-      f_consts << '&';
+      f_consts << "const& ";
     }
     f_consts << name << "()";
     if (inlined) {
-      f_consts << " { return " << render_const_value(f_consts, type, value)
-        << "; }" << endl;
+      f_consts << " { return " << consts_struct << "::" << name
+               << "(); }" << endl;
     } else {
       f_consts << ';' << endl;
     }
@@ -1164,9 +1154,9 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     indent_up();
     f_consts_impl << indent() << "static auto const instance([]() {" << endl;
     indent_up();
-    f_consts_impl << indent() << type_name(type) << " value;" << endl << endl;
-    print_const_value(f_consts_impl, "value", type, value);
-    f_consts_impl << indent() << "return value;" << endl;
+    f_consts_impl << indent() << type_name(type) << " value = "
+                  << consts_struct << "::" << name << "();" << endl;
+     f_consts_impl << indent() << "return value;" << endl;
     indent_down();
     f_consts_impl << indent() << "}());" << endl
       << indent() << "return instance;" << endl;
@@ -1205,10 +1195,9 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
     program_name_ << "Constants::" << program_name_ << "Constants() {" << endl;
   indent_up();
   for (c_iter = consts.begin(); c_iter != consts.end(); ++c_iter) {
-    print_const_value(f_consts_impl,
-                      (*c_iter)->get_name(),
-                      (*c_iter)->get_type(),
-                      (*c_iter)->get_value());
+    string name = (*c_iter)->get_name();
+    f_consts_impl << indent() << name << " = "
+                  << consts_struct << "::" << name << "();" << endl;
   }
   indent_down();
   indent(f_consts_impl) <<
@@ -1217,8 +1206,7 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
 
   f_consts << endl <<
     ns_close_ << endl <<
-    endl <<
-    "#endif" << endl;
+    endl;
   f_consts.close();
 
   f_consts_impl <<
@@ -1240,13 +1228,15 @@ void t_cpp_generator::print_const_value(ofstream& out, string name, t_type* type
   } else if (type->is_struct() || type->is_xception()) {
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       t_type* field_type = nullptr;
+      bool required = true;
       for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
         if ((*f_iter)->get_name() == v_iter->first->get_string()) {
           field_type = (*f_iter)->get_type();
+          required = is_required(*f_iter);
         }
       }
       if (field_type == nullptr) {
@@ -1254,14 +1244,16 @@ void t_cpp_generator::print_const_value(ofstream& out, string name, t_type* type
       }
       string val = render_const_value(out, field_type, v_iter->second);
       indent(out) << name << "." << v_iter->first->get_string() << " = " << val << ";" << endl;
-      indent(out) << name << ".__isset." << v_iter->first->get_string() << " = true;" << endl;
+      if (!required) {
+        indent(out) << name << ".__isset." << v_iter->first->get_string() << " = true;" << endl;
+      }
     }
     out << endl;
   } else if (type->is_map()) {
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       string key = render_const_value(out, ktype, v_iter->first);
       string val = render_const_value(out, vtype, v_iter->second);
@@ -1330,9 +1322,7 @@ string t_cpp_generator::render_const_value(
   std::ostringstream render;
 
   // Resolve typedefs.
-  while (type->is_typedef()) {
-    type = ((t_typedef*)type)->get_type();
-  }
+  type = get_true_type(type);
 
   if (value == nullptr) {
     if (allow_null_val) {
@@ -2452,7 +2442,7 @@ void t_cpp_generator::generate_struct_definition(ofstream& out,
   generate_hash_and_equal_to(out, tstruct, tstruct->get_name());
 }
 
-bool is_boolean_type(t_type* ttype) {
+static bool is_boolean_type(t_type* ttype) {
   if (ttype->is_base_type()) {
     t_base_type* btype = static_cast<t_base_type*>(ttype);
     if (t_base_type::TYPE_BOOL == btype->get_base()) {
@@ -2830,7 +2820,7 @@ void t_cpp_generator::generate_json_struct(ofstream& out,
   }
 
   if (dereference) {
-    indent(out) << prefix_thrift << ".reset(new " << tstruct->get_name()
+    indent(out) << prefix_thrift << ".reset(new " << type_name(tstruct)
       << "());" << endl;
   }
   indent(out) << prefix_thrift << ref << "readFromJson(folly::toJson("
@@ -6881,7 +6871,7 @@ void t_cpp_generator::generate_serialize_list_element(ofstream& out,
 /**
  * Makes a :: prefix for a namespace
  *
- * @param ns The namepsace, w/ periods in it
+ * @param ns The namespace, w/ periods in it
  * @return Namespaces
  */
 string t_cpp_generator::namespace_prefix(string ns, string delimiter) const {
@@ -7149,15 +7139,14 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
   };
   std::vector<Field> fields;
 
-  std::map<std::string, std::string> deps;
+  std::map<std::string, t_type*> deps;
 
   auto gen_dep = [&] (t_type* ttype) mutable -> TypeInfo {
     auto initializer = generate_reflection_datatype(ttype);
-    std::string name = ttype->get_full_name();
     if (!initializer.empty()) {
-      deps[initializer] = name;
+      deps[initializer] = ttype;
     }
-    return {ttype->get_type_id(), name};
+    return {ttype->get_type_id(), ttype->get_full_name()};
   };
 
   std::map<std::string, int32_t> enumValues;
@@ -7191,6 +7180,13 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
     throw "compiler error: weird type? " + ttype->get_name();
   }
 
+  auto maybePrintStatic = [this](t_type* ttype) {
+    ttype = get_true_type(ttype);
+    if (!ttype->is_struct() && !ttype->is_xception()) {
+      f_reflection_impl_ << "static ";
+    }
+  };
+
   // Generate initializer.
   //
   // We only remove duplicates from the same file, so we could end up
@@ -7200,9 +7196,10 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
 
   // Generate forward decls for dependent initializers
   for (auto& p : deps) {
+    maybePrintStatic(p.second);
     f_reflection_impl_
       << "void  " << p.first << "(" << ns << "Schema&);"
-      << "  // " << p.second << endl;
+      << "  // " << p.second->get_full_name() << endl;
   }
 
   f_reflection_impl_ <<
@@ -7211,10 +7208,7 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
   // Reflection initializers for dependent types of structs/exceptions are
   // only called from within this file when initializing the structs and
   // exceptions.
-  if (!ttype->is_struct() && !ttype->is_xception()) {
-    f_reflection_impl_ << "static ";
-  }
-
+  maybePrintStatic(ttype);
   f_reflection_impl_ <<
     "void " << initializer << "(" << ns << "Schema& schema) {" << endl;
 
@@ -7269,17 +7263,26 @@ std::string t_cpp_generator::generate_reflection_datatype(t_type* ttype) {
   if (ttype->is_enum()) {
     f_reflection_impl_
       << "  dt.__isset.enumValues = true;" << endl;
+
+    f_reflection_impl_ << "  static const std::pair<const char*, int32_t> "
+                       << "enumValues[] = {" << endl;
     for (auto& p : enumValues) {
       f_reflection_impl_
-        << "  dt.enumValues[\"" << escape(p.first) << "\"] = " << p.second
-        << ";" << endl;
+        << "    {\"" << escape(p.first) << "\", " << p.second << "}," << endl;
     }
+    f_reflection_impl_ << "  };" << endl;
+
+    f_reflection_impl_ << "  dt.enumValues.insert("
+                       << "boost::container::ordered_unique_range_t(), "
+                       << "enumValues, enumValues + "
+                       << enumValues.size() << ");" << endl;
   }
 
   // Call dependent initializers
   for (auto& p : deps) {
     f_reflection_impl_
-      << "  " << p.first << "(schema);" << "  // " << p.second << endl;
+      << "  " << p.first << "(schema);"
+      << "  // " << p.second->get_full_name() << endl;
   }
 
   f_reflection_impl_ <<
@@ -7537,18 +7540,8 @@ string t_cpp_generator::get_include_prefix(const t_program& program) const {
   return "";
 }
 
-string t_cpp_generator::get_include_guard(const char* suffix) const {
-
-  string ns = namespace_prefix(get_program()->get_namespace("cpp"), "_");
-
-  stringstream ss;
-  ss << "#ifndef " << ns << program_name_ << suffix
-     << endl
-     << "#define " << ns << program_name_ << suffix
-     << endl
-     << endl;
-
-  return ss.str();
+string t_cpp_generator::get_include_guard() const {
+  return "#pragma once\n\n";
 }
 
 THRIFT_REGISTER_GENERATOR(cpp, "C++",

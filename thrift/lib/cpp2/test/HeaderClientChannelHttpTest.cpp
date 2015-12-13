@@ -57,6 +57,8 @@ class TestServiceHandler : public TestServiceIf {
 
   void notCalledBack() override {}
   void voidResponse() override {}
+  int32_t processHeader() override { return 1; }
+  void echoIOBuf(string& /*_return*/, const string& /*req*/) override {}
 };
 
 std::unique_ptr<ScopedServerThread> createHttpServer() {
@@ -76,10 +78,10 @@ std::unique_ptr<ScopedServerThread> createHttpServer() {
 TEST(HeaderClientChannelHttpTest, SimpleTest) {
   std::unique_ptr<ScopedServerThread> serverThread = createHttpServer();
 
-  TEventBase eb;
+  folly::EventBase eb;
   const folly::SocketAddress* addr = serverThread->getAddress();
   std::shared_ptr<TAsyncSocket> socket = TAsyncSocket::newSocket(&eb, *addr);
-  std::unique_ptr<HeaderClientChannel, TDelayedDestruction::Destructor> channel(
+  std::unique_ptr<HeaderClientChannel, folly::DelayedDestruction::Destructor> channel(
       new HeaderClientChannel(socket));
   channel->useAsHttpClient("127.0.0.1", "meh");
   TestServiceAsyncClient client(std::move(channel));
@@ -113,10 +115,10 @@ TEST(HeaderClientChannelHttpTest, SimpleTest) {
 TEST(HeaderClientChannel, LongResponse) {
   std::unique_ptr<ScopedServerThread> serverThread = createHttpServer();
 
-  TEventBase eb;
+  folly::EventBase eb;
   const folly::SocketAddress* addr = serverThread->getAddress();
   std::shared_ptr<TAsyncSocket> socket = TAsyncSocket::newSocket(&eb, *addr);
-  std::unique_ptr<HeaderClientChannel, TDelayedDestruction::Destructor> channel(
+  std::unique_ptr<HeaderClientChannel, folly::DelayedDestruction::Destructor> channel(
       new HeaderClientChannel(socket));
   channel->useAsHttpClient("127.0.0.1", "meh");
   TestServiceAsyncClient client(std::move(channel));

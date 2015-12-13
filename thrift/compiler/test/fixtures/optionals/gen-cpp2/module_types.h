@@ -33,6 +33,12 @@ extern const std::map<Animal, const char*> _Animal_VALUES_TO_NAMES;
 extern const std::map<const char*, Animal, apache::thrift::ltstr> _Animal_NAMES_TO_VALUES;
 
 } // cpp2
+namespace std {
+
+template<> struct hash<typename  ::cpp2::Animal> : public apache::thrift::detail::enum_hash<typename  ::cpp2::Animal> {};
+template<> struct equal_to<typename  ::cpp2::Animal> : public apache::thrift::detail::enum_equal_to<typename  ::cpp2::Animal> {};
+
+} // std
 namespace apache { namespace thrift {
 
 template <> const char* TEnumTraitsBase< ::cpp2::Animal>::findName( ::cpp2::Animal value);
@@ -218,10 +224,7 @@ class Person : private boost::totally_ordered<Person> {
  public:
 
   Person() :
-      id(0),
-      age(0),
-      bestFriend(0),
-      afraidOfAnimal( ::cpp2::Animal()) {}
+      id(0) {}
   // FragileConstructor for use in initialization lists only
 
   Person(apache::thrift::FragileConstructor,  ::cpp2::PersonID id__arg, std::string name__arg, int16_t age__arg, std::string address__arg,  ::cpp2::Color favoriteColor__arg, std::set< ::cpp2::PersonID> friends__arg,  ::cpp2::PersonID bestFriend__arg, std::map< ::cpp2::Animal, std::string> petNames__arg,  ::cpp2::Animal afraidOfAnimal__arg, std::vector< ::cpp2::Vehicle> vehicles__arg) :

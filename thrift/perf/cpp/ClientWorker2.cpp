@@ -16,11 +16,11 @@
 
 #define __STDC_FORMAT_MACROS
 
-#include "thrift/perf/cpp/ClientWorker2.h"
+#include <thrift/perf/cpp/ClientWorker2.h>
 
 #include <thrift/lib/cpp/ClientUtil.h>
 #include <thrift/lib/cpp/test/loadgen/RNG.h>
-#include "thrift/perf/cpp/ClientLoadConfig.h"
+#include <thrift/perf/cpp/ClientLoadConfig.h>
 #include <thrift/lib/cpp/async/TAsyncSocket.h>
 #include <thrift/lib/cpp/async/TAsyncSSLSocket.h>
 #include <thrift/lib/cpp2/async/GssSaslClient.h>
@@ -44,7 +44,7 @@ std::shared_ptr<ClientWorker2::Client> ClientWorker2::createConnection() {
   std::shared_ptr<TAsyncSocket> socket;
   std::unique_ptr<
     RequestChannel,
-    apache::thrift::async::TDelayedDestruction::Destructor> channel;
+    folly::DelayedDestruction::Destructor> channel;
   if (config->useSR()) {
     facebook::servicerouter::ConnConfigs configs;
     facebook::servicerouter::ServiceOptions options;
@@ -57,11 +57,8 @@ std::shared_ptr<ClientWorker2::Client> ClientWorker2::createConnection() {
         configs["thrift_security_service_tier"] = config->SASLServiceTier();
       }
     }
-    channel = std::move(facebook::servicerouter::cpp2::getClientFactory()
-                                        .getChannel(config->srTier(),
-                                                    ebm_.getEventBase(),
-                                                    std::move(options),
-                                                    std::move(configs)));
+    channel = facebook::servicerouter::cpp2::getClientFactory()
+      .getChannel(config->srTier(), ebm_.getEventBase(), options, configs);
   } else {
     if (config->useSSL()) {
       std::shared_ptr<SSLContext> context = std::make_shared<SSLContext>();
@@ -91,7 +88,7 @@ std::shared_ptr<ClientWorker2::Client> ClientWorker2::createConnection() {
     }
     std::unique_ptr<
       HeaderClientChannel,
-      apache::thrift::async::TDelayedDestruction::Destructor> headerChannel(
+      folly::DelayedDestruction::Destructor> headerChannel(
           HeaderClientChannel::newChannel(socket));
     // Always use binary in loadtesting to get apples to apples comparison
     headerChannel->setProtocolId(apache::thrift::protocol::T_BINARY_PROTOCOL);

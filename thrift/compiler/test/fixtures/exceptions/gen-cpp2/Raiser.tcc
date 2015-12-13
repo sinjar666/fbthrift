@@ -26,13 +26,13 @@ typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, apache:
 typedef apache::thrift::ThriftPresult<false> Raiser_get500_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, apache::thrift::protocol::T_STRING, std::string*>, apache::thrift::FieldData<1, apache::thrift::protocol::T_STRUCT,  ::cpp2::Fiery>, apache::thrift::FieldData<2, apache::thrift::protocol::T_STRUCT,  ::cpp2::Banal>> Raiser_get500_presult;
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::_processInThread_doBland(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::_processInThread_doBland(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   auto pri = iface_->getRequestPriority(ctx, apache::thrift::concurrency::NORMAL);
   processInThread<ProtocolIn_, ProtocolOut_>(std::move(req), std::move(buf),std::move(iprot), ctx, eb, tm, pri, false, &RaiserAsyncProcessor::process_doBland<ProtocolIn_, ProtocolOut_>, this);
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::process_doBland(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::process_doBland(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   // make sure getConnectionContext is null
   // so async calls don't accidentally use it
   iface_->setConnectionContext(nullptr);
@@ -83,10 +83,12 @@ void RaiserAsyncProcessor::throw_doBland(std::unique_ptr<apache::thrift::Respons
     std::rethrow_exception(ep);
   }
   catch (const std::exception& e) {
+    auto ew = folly::exception_wrapper(ep, e);
     if (req) {
       LOG(ERROR) << folly::exceptionStr(e).toStdString() << " in function doBland";
       apache::thrift::TApplicationException x(folly::exceptionStr(e).toStdString());
-      ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("doBland", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -121,7 +123,8 @@ void RaiserAsyncProcessor::throw_wrapped_doBland(std::unique_ptr<apache::thrift:
     if (req) {
       LOG(ERROR) << ew.what().toStdString() << " in function doBland";
       apache::thrift::TApplicationException x(ew.what().toStdString());
-      ctx->userException(ew.class_name().toStdString(), ew.what().toStdString());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("doBland", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -134,13 +137,13 @@ void RaiserAsyncProcessor::throw_wrapped_doBland(std::unique_ptr<apache::thrift:
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::_processInThread_doRaise(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::_processInThread_doRaise(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   auto pri = iface_->getRequestPriority(ctx, apache::thrift::concurrency::NORMAL);
   processInThread<ProtocolIn_, ProtocolOut_>(std::move(req), std::move(buf),std::move(iprot), ctx, eb, tm, pri, false, &RaiserAsyncProcessor::process_doRaise<ProtocolIn_, ProtocolOut_>, this);
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::process_doRaise(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::process_doRaise(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   // make sure getConnectionContext is null
   // so async calls don't accidentally use it
   iface_->setConnectionContext(nullptr);
@@ -192,20 +195,22 @@ void RaiserAsyncProcessor::throw_doRaise(std::unique_ptr<apache::thrift::Respons
     std::rethrow_exception(ep);
   }
   catch (const  ::cpp2::Banal& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+    ctx->userExceptionWrapped(true, folly::exception_wrapper(e));
     result.get<0>().ref() = e;
     result.setIsSet(0, true);
   }
   catch (const  ::cpp2::Fiery& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+    ctx->userExceptionWrapped(true, folly::exception_wrapper(e));
     result.get<1>().ref() = e;
     result.setIsSet(1, true);
   }
   catch (const std::exception& e) {
+    auto ew = folly::exception_wrapper(ep, e);
     if (req) {
       LOG(ERROR) << folly::exceptionStr(e).toStdString() << " in function doRaise";
       apache::thrift::TApplicationException x(folly::exceptionStr(e).toStdString());
-      ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("doRaise", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -240,14 +245,14 @@ void RaiserAsyncProcessor::throw_wrapped_doRaise(std::unique_ptr<apache::thrift:
   }
   ProtocolOut_ prot;
   Raiser_doRaise_presult result;
-  if (ew.with_exception< ::cpp2::Banal>([&]( ::cpp2::Banal& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+  if (ew.with_exception([&]( ::cpp2::Banal& e) {
+    ctx->userExceptionWrapped(true, ew);
     result.get<0>().ref() = e;
     result.setIsSet(0, true);
   }
   )) {} else
-  if (ew.with_exception< ::cpp2::Fiery>([&]( ::cpp2::Fiery& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+  if (ew.with_exception([&]( ::cpp2::Fiery& e) {
+    ctx->userExceptionWrapped(true, ew);
     result.get<1>().ref() = e;
     result.setIsSet(1, true);
   }
@@ -256,7 +261,8 @@ void RaiserAsyncProcessor::throw_wrapped_doRaise(std::unique_ptr<apache::thrift:
     if (req) {
       LOG(ERROR) << ew.what().toStdString() << " in function doRaise";
       apache::thrift::TApplicationException x(ew.what().toStdString());
-      ctx->userException(ew.class_name().toStdString(), ew.what().toStdString());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("doRaise", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -272,13 +278,13 @@ void RaiserAsyncProcessor::throw_wrapped_doRaise(std::unique_ptr<apache::thrift:
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::_processInThread_get200(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::_processInThread_get200(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   auto pri = iface_->getRequestPriority(ctx, apache::thrift::concurrency::NORMAL);
   processInThread<ProtocolIn_, ProtocolOut_>(std::move(req), std::move(buf),std::move(iprot), ctx, eb, tm, pri, false, &RaiserAsyncProcessor::process_get200<ProtocolIn_, ProtocolOut_>, this);
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::process_get200(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::process_get200(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   // make sure getConnectionContext is null
   // so async calls don't accidentally use it
   iface_->setConnectionContext(nullptr);
@@ -331,10 +337,12 @@ void RaiserAsyncProcessor::throw_get200(std::unique_ptr<apache::thrift::Response
     std::rethrow_exception(ep);
   }
   catch (const std::exception& e) {
+    auto ew = folly::exception_wrapper(ep, e);
     if (req) {
       LOG(ERROR) << folly::exceptionStr(e).toStdString() << " in function get200";
       apache::thrift::TApplicationException x(folly::exceptionStr(e).toStdString());
-      ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("get200", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -369,7 +377,8 @@ void RaiserAsyncProcessor::throw_wrapped_get200(std::unique_ptr<apache::thrift::
     if (req) {
       LOG(ERROR) << ew.what().toStdString() << " in function get200";
       apache::thrift::TApplicationException x(ew.what().toStdString());
-      ctx->userException(ew.class_name().toStdString(), ew.what().toStdString());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("get200", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -382,13 +391,13 @@ void RaiserAsyncProcessor::throw_wrapped_get200(std::unique_ptr<apache::thrift::
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::_processInThread_get500(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::_processInThread_get500(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   auto pri = iface_->getRequestPriority(ctx, apache::thrift::concurrency::NORMAL);
   processInThread<ProtocolIn_, ProtocolOut_>(std::move(req), std::move(buf),std::move(iprot), ctx, eb, tm, pri, false, &RaiserAsyncProcessor::process_get500<ProtocolIn_, ProtocolOut_>, this);
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void RaiserAsyncProcessor::process_get500(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void RaiserAsyncProcessor::process_get500(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   // make sure getConnectionContext is null
   // so async calls don't accidentally use it
   iface_->setConnectionContext(nullptr);
@@ -442,20 +451,22 @@ void RaiserAsyncProcessor::throw_get500(std::unique_ptr<apache::thrift::Response
     std::rethrow_exception(ep);
   }
   catch (const  ::cpp2::Fiery& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+    ctx->userExceptionWrapped(true, folly::exception_wrapper(e));
     result.get<1>().ref() = e;
     result.setIsSet(1, true);
   }
   catch (const  ::cpp2::Banal& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+    ctx->userExceptionWrapped(true, folly::exception_wrapper(e));
     result.get<2>().ref() = e;
     result.setIsSet(2, true);
   }
   catch (const std::exception& e) {
+    auto ew = folly::exception_wrapper(ep, e);
     if (req) {
       LOG(ERROR) << folly::exceptionStr(e).toStdString() << " in function get500";
       apache::thrift::TApplicationException x(folly::exceptionStr(e).toStdString());
-      ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("get500", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -490,14 +501,14 @@ void RaiserAsyncProcessor::throw_wrapped_get500(std::unique_ptr<apache::thrift::
   }
   ProtocolOut_ prot;
   Raiser_get500_presult result;
-  if (ew.with_exception< ::cpp2::Fiery>([&]( ::cpp2::Fiery& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+  if (ew.with_exception([&]( ::cpp2::Fiery& e) {
+    ctx->userExceptionWrapped(true, ew);
     result.get<1>().ref() = e;
     result.setIsSet(1, true);
   }
   )) {} else
-  if (ew.with_exception< ::cpp2::Banal>([&]( ::cpp2::Banal& e) {
-    ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+  if (ew.with_exception([&]( ::cpp2::Banal& e) {
+    ctx->userExceptionWrapped(true, ew);
     result.get<2>().ref() = e;
     result.setIsSet(2, true);
   }
@@ -506,7 +517,8 @@ void RaiserAsyncProcessor::throw_wrapped_get500(std::unique_ptr<apache::thrift::
     if (req) {
       LOG(ERROR) << ew.what().toStdString() << " in function get500";
       apache::thrift::TApplicationException x(ew.what().toStdString());
-      ctx->userException(ew.class_name().toStdString(), ew.what().toStdString());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("get500", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -523,10 +535,9 @@ void RaiserAsyncProcessor::throw_wrapped_get500(std::unique_ptr<apache::thrift::
 
 template <typename Protocol_>
 void RaiserAsyncClient::doBlandT(Protocol_* prot, apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback) {
-  auto header = std::make_shared<apache::thrift::transport::THeader>();
+  auto header = std::make_shared<apache::thrift::transport::THeader>(apache::thrift::transport::THeader::ALLOW_BIG_FRAMES);
   header->setProtocolId(getChannel()->getProtocolId());
   header->setHeaders(rpcOptions.releaseWriteHeaders());
-  getChannel()->flushWriteHeaders(header.get());
   connectionContext_->setRequestHeader(header.get());
   std::unique_ptr<apache::thrift::ContextStack> ctx = this->getContextStack(this->getServiceName(), "Raiser.doBland", connectionContext_.get());
   Raiser_doBland_pargs args;
@@ -578,11 +589,11 @@ folly::exception_wrapper RaiserAsyncClient::recv_wrapped_doBlandT(Protocol_* pro
     ctx->postRead(state.header(), state.buf()->length());
   }
   );
-  if (interior_ew || caught_ew) {
-    ctx->handlerError();
-    return interior_ew ? interior_ew : caught_ew;
+  auto ew = interior_ew ? std::move(interior_ew) : std::move(caught_ew);
+  if (ew) {
+    ctx->handlerErrorWrapped(ew);
   }
-  return folly::exception_wrapper();
+  return ew;
 }
 
 template <typename Protocol_>
@@ -595,10 +606,9 @@ void RaiserAsyncClient::recv_doBlandT(Protocol_* prot, ::apache::thrift::ClientR
 
 template <typename Protocol_>
 void RaiserAsyncClient::doRaiseT(Protocol_* prot, apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback) {
-  auto header = std::make_shared<apache::thrift::transport::THeader>();
+  auto header = std::make_shared<apache::thrift::transport::THeader>(apache::thrift::transport::THeader::ALLOW_BIG_FRAMES);
   header->setProtocolId(getChannel()->getProtocolId());
   header->setHeaders(rpcOptions.releaseWriteHeaders());
-  getChannel()->flushWriteHeaders(header.get());
   connectionContext_->setRequestHeader(header.get());
   std::unique_ptr<apache::thrift::ContextStack> ctx = this->getContextStack(this->getServiceName(), "Raiser.doRaise", connectionContext_.get());
   Raiser_doRaise_pargs args;
@@ -658,11 +668,11 @@ folly::exception_wrapper RaiserAsyncClient::recv_wrapped_doRaiseT(Protocol_* pro
     }
   }
   );
-  if (interior_ew || caught_ew) {
-    ctx->handlerError();
-    return interior_ew ? interior_ew : caught_ew;
+  auto ew = interior_ew ? std::move(interior_ew) : std::move(caught_ew);
+  if (ew) {
+    ctx->handlerErrorWrapped(ew);
   }
-  return folly::exception_wrapper();
+  return ew;
 }
 
 template <typename Protocol_>
@@ -675,10 +685,9 @@ void RaiserAsyncClient::recv_doRaiseT(Protocol_* prot, ::apache::thrift::ClientR
 
 template <typename Protocol_>
 void RaiserAsyncClient::get200T(Protocol_* prot, apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback) {
-  auto header = std::make_shared<apache::thrift::transport::THeader>();
+  auto header = std::make_shared<apache::thrift::transport::THeader>(apache::thrift::transport::THeader::ALLOW_BIG_FRAMES);
   header->setProtocolId(getChannel()->getProtocolId());
   header->setHeaders(rpcOptions.releaseWriteHeaders());
-  getChannel()->flushWriteHeaders(header.get());
   connectionContext_->setRequestHeader(header.get());
   std::unique_ptr<apache::thrift::ContextStack> ctx = this->getContextStack(this->getServiceName(), "Raiser.get200", connectionContext_.get());
   Raiser_get200_pargs args;
@@ -739,11 +748,11 @@ folly::exception_wrapper RaiserAsyncClient::recv_wrapped_get200T(Protocol_* prot
     }
   }
   );
-  if (interior_ew || caught_ew) {
-    ctx->handlerError();
-    return interior_ew ? interior_ew : caught_ew;
+  auto ew = interior_ew ? std::move(interior_ew) : std::move(caught_ew);
+  if (ew) {
+    ctx->handlerErrorWrapped(ew);
   }
-  return folly::exception_wrapper();
+  return ew;
 }
 
 template <typename Protocol_>
@@ -756,10 +765,9 @@ void RaiserAsyncClient::recv_get200T(Protocol_* prot, std::string& _return, ::ap
 
 template <typename Protocol_>
 void RaiserAsyncClient::get500T(Protocol_* prot, apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback) {
-  auto header = std::make_shared<apache::thrift::transport::THeader>();
+  auto header = std::make_shared<apache::thrift::transport::THeader>(apache::thrift::transport::THeader::ALLOW_BIG_FRAMES);
   header->setProtocolId(getChannel()->getProtocolId());
   header->setHeaders(rpcOptions.releaseWriteHeaders());
-  getChannel()->flushWriteHeaders(header.get());
   connectionContext_->setRequestHeader(header.get());
   std::unique_ptr<apache::thrift::ContextStack> ctx = this->getContextStack(this->getServiceName(), "Raiser.get500", connectionContext_.get());
   Raiser_get500_pargs args;
@@ -828,11 +836,11 @@ folly::exception_wrapper RaiserAsyncClient::recv_wrapped_get500T(Protocol_* prot
     }
   }
   );
-  if (interior_ew || caught_ew) {
-    ctx->handlerError();
-    return interior_ew ? interior_ew : caught_ew;
+  auto ew = interior_ew ? std::move(interior_ew) : std::move(caught_ew);
+  if (ew) {
+    ctx->handlerErrorWrapped(ew);
   }
-  return folly::exception_wrapper();
+  return ew;
 }
 
 template <typename Protocol_>

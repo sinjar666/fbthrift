@@ -93,15 +93,19 @@ std::vector<std::string> getHostRealm(krb5_context context,
  */
 class Krb5Context {
 public:
+  enum class ContextType { NORMAL, THREAD_LOCAL, KDC };
   // Can throw if the context cannot be initialized for some reason.
   explicit Krb5Context(bool thread_local_ctx = false);
+  explicit Krb5Context(ContextType type);
   ~Krb5Context();
 
   krb5_context get() const;
 
 private:
   mutable krb5_context context_;
+#ifdef KRB5_HAS_INIT_THREAD_LOCAL_CONTEXT
   bool threadLocal_;
+#endif
 };
 
 /**
@@ -159,6 +163,10 @@ public:
   bool operator!=(const Krb5Principal& other) const {
     return !(*this == other);
   }
+
+  // This is an unofficial agreement and may be not true for
+  // 'unusual' kerberos setups
+  bool isUser() const;
 
   krb5_context get_context() const { return context_; }
 

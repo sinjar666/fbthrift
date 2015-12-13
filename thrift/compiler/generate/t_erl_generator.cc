@@ -26,8 +26,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sstream>
-#include "thrift/compiler/generate/t_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_generator.h>
+#include <thrift/compiler/platform.h>
 
 using namespace std;
 
@@ -40,8 +40,8 @@ class t_erl_generator : public t_generator {
  public:
   t_erl_generator(
       t_program* program,
-      const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::map<std::string, std::string>& /*parsed_options*/,
+      const std::string& /*option_string*/)
     : t_generator(program)
   {
     program_name_[0] = tolower(program_name_[0]);
@@ -215,7 +215,7 @@ void t_erl_generator::hrl_header(ostream& out, string name) {
     "-define(_" << name << "_included, yeah)." << endl;
 }
 
-void t_erl_generator::hrl_footer(ostream& out, string name) {
+void t_erl_generator::hrl_footer(ostream& out, string /*name*/) {
   out << "-endif." << endl;
 }
 
@@ -276,7 +276,7 @@ void t_erl_generator::close_generator() {
  *
  * @param ttypedef The type definition
  */
-void t_erl_generator::generate_typedef(t_typedef* ttypedef) {
+void t_erl_generator::generate_typedef(t_typedef* /*ttypedef*/) {
 }
 
 /**
@@ -355,8 +355,8 @@ string t_erl_generator::render_const_value(t_type* type, t_const_value* value) {
     out << "#" << type->get_name() << "{";
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
 
     bool first = true;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
@@ -385,8 +385,8 @@ string t_erl_generator::render_const_value(t_type* type, t_const_value* value) {
   } else if (type->is_map()) {
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
 
     bool first = true;
     out << "dict:from_list([";
@@ -477,7 +477,7 @@ void t_erl_generator::generate_erl_struct_definition(ostream& out,
                                                      ostream& hrl_out,
                                                      t_struct* tstruct,
                                                      bool is_exception,
-                                                     bool is_result)
+                                                     bool /*is_result*/)
 {
   const vector<t_field*>& members = tstruct->get_members();
   vector<t_field*>::const_iterator m_iter;
@@ -620,7 +620,7 @@ void t_erl_generator::generate_service_helpers(t_service* tservice) {
  *
  * @param tfunction The function
  */
-void t_erl_generator::generate_erl_function_helpers(t_function* tfunction) {
+void t_erl_generator::generate_erl_function_helpers(t_function* /*tfunction*/) {
 }
 
 /**
@@ -662,8 +662,8 @@ void t_erl_generator::generate_service_interface(t_service* tservice) {
  * Generates a function_info(FunctionName, params_type) and
  * function_info(FunctionName, reply_type)
  */
-void t_erl_generator::generate_function_info(t_service* tservice,
-                                                t_function* tfunction) {
+void t_erl_generator::generate_function_info(t_service* /*tservice*/,
+                                             t_function* tfunction) {
 
   string name_atom = "'" + tfunction->get_name() + "'";
 

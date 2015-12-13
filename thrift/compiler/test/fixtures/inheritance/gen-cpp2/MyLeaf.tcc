@@ -20,13 +20,13 @@ namespace cpp2 {
 typedef apache::thrift::ThriftPresult<false> MyLeaf_do_leaf_pargs;
 typedef apache::thrift::ThriftPresult<true> MyLeaf_do_leaf_presult;
 template <typename ProtocolIn_, typename ProtocolOut_>
-void MyLeafAsyncProcessor::_processInThread_do_leaf(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void MyLeafAsyncProcessor::_processInThread_do_leaf(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   auto pri = iface_->getRequestPriority(ctx, apache::thrift::concurrency::NORMAL);
   processInThread<ProtocolIn_, ProtocolOut_>(std::move(req), std::move(buf),std::move(iprot), ctx, eb, tm, pri, false, &MyLeafAsyncProcessor::process_do_leaf<ProtocolIn_, ProtocolOut_>, this);
 }
 
 template <typename ProtocolIn_, typename ProtocolOut_>
-void MyLeafAsyncProcessor::process_do_leaf(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,apache::thrift::async::TEventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
+void MyLeafAsyncProcessor::process_do_leaf(std::unique_ptr<apache::thrift::ResponseChannel::Request> req, std::unique_ptr<folly::IOBuf> buf, std::unique_ptr<ProtocolIn_> iprot,apache::thrift::Cpp2RequestContext* ctx,folly::EventBase* eb, apache::thrift::concurrency::ThreadManager* tm) {
   // make sure getConnectionContext is null
   // so async calls don't accidentally use it
   iface_->setConnectionContext(nullptr);
@@ -77,10 +77,12 @@ void MyLeafAsyncProcessor::throw_do_leaf(std::unique_ptr<apache::thrift::Respons
     std::rethrow_exception(ep);
   }
   catch (const std::exception& e) {
+    auto ew = folly::exception_wrapper(ep, e);
     if (req) {
       LOG(ERROR) << folly::exceptionStr(e).toStdString() << " in function do_leaf";
       apache::thrift::TApplicationException x(folly::exceptionStr(e).toStdString());
-      ctx->userException(folly::demangle(typeid(e)).toStdString(), e.what());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("do_leaf", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -115,7 +117,8 @@ void MyLeafAsyncProcessor::throw_wrapped_do_leaf(std::unique_ptr<apache::thrift:
     if (req) {
       LOG(ERROR) << ew.what().toStdString() << " in function do_leaf";
       apache::thrift::TApplicationException x(ew.what().toStdString());
-      ctx->userException(ew.class_name().toStdString(), ew.what().toStdString());
+      ctx->userExceptionWrapped(false, ew);
+      ctx->handlerErrorWrapped(ew);
       folly::IOBufQueue queue = serializeException("do_leaf", &prot, protoSeqId, ctx, x);
       queue.append(apache::thrift::transport::THeader::transform(queue.move(), reqCtx->getHeader()->getWriteTransforms(), reqCtx->getHeader()->getMinCompressBytes()));
       req->sendReply(queue.move());
@@ -129,10 +132,9 @@ void MyLeafAsyncProcessor::throw_wrapped_do_leaf(std::unique_ptr<apache::thrift:
 
 template <typename Protocol_>
 void MyLeafAsyncClient::do_leafT(Protocol_* prot, apache::thrift::RpcOptions& rpcOptions, std::unique_ptr<apache::thrift::RequestCallback> callback) {
-  auto header = std::make_shared<apache::thrift::transport::THeader>();
+  auto header = std::make_shared<apache::thrift::transport::THeader>(apache::thrift::transport::THeader::ALLOW_BIG_FRAMES);
   header->setProtocolId(getChannel()->getProtocolId());
   header->setHeaders(rpcOptions.releaseWriteHeaders());
-  getChannel()->flushWriteHeaders(header.get());
   connectionContext_->setRequestHeader(header.get());
   std::unique_ptr<apache::thrift::ContextStack> ctx = this->getContextStack(this->getServiceName(), "MyLeaf.do_leaf", connectionContext_.get());
   MyLeaf_do_leaf_pargs args;
@@ -184,11 +186,11 @@ folly::exception_wrapper MyLeafAsyncClient::recv_wrapped_do_leafT(Protocol_* pro
     ctx->postRead(state.header(), state.buf()->length());
   }
   );
-  if (interior_ew || caught_ew) {
-    ctx->handlerError();
-    return interior_ew ? interior_ew : caught_ew;
+  auto ew = interior_ew ? std::move(interior_ew) : std::move(caught_ew);
+  if (ew) {
+    ctx->handlerErrorWrapped(ew);
   }
-  return folly::exception_wrapper();
+  return ew;
 }
 
 template <typename Protocol_>

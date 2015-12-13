@@ -32,11 +32,12 @@ using folly::IOBufQueue;
 using folly::make_unique;
 using namespace apache::thrift::transport;
 using namespace apache::thrift;
-using apache::thrift::async::TEventBase;
+using folly::EventBase;
 using apache::thrift::async::TAsyncSocket;
 using apache::thrift::async::TAsyncTransport;
 using apache::thrift::TApplicationException;
 using apache::thrift::server::TServerObserver;
+using apache::thrift::protocol::PROTOCOL_TYPES;
 
 namespace apache { namespace thrift {
 
@@ -59,7 +60,7 @@ HeaderServerChannel::HeaderServerChannel(
     , timeoutSASL_(5000)
     , saslServerCallback_(*this)
     , cpp2Channel_(cpp2Channel)
-    , timer_(new apache::thrift::async::HHWheelTimer(getEventBase())) {}
+    , timer_(new folly::HHWheelTimer(getEventBase())) {}
 
 void HeaderServerChannel::destroy() {
   DestructorGuard dg(this);
@@ -77,7 +78,7 @@ void HeaderServerChannel::destroy() {
 
   cpp2Channel_->closeNow();
 
-  TDelayedDestruction::destroy();
+  folly::DelayedDestruction::destroy();
 }
 
 // Header framing
@@ -97,7 +98,7 @@ HeaderServerChannel::ServerFramingHandler::addFrame(unique_ptr<IOBuf> buf,
 
 std::tuple<unique_ptr<IOBuf>, size_t, unique_ptr<THeader>>
 HeaderServerChannel::ServerFramingHandler::removeFrame(IOBufQueue* q) {
-  std::unique_ptr<THeader> header(new THeader);
+  std::unique_ptr<THeader> header(new THeader(THeader::ALLOW_BIG_FRAMES));
   // removeHeader will set seqid in header.
   // For older clients with seqid in the protocol, header
   // will dig in to the protocol to get the seqid correctly.
@@ -127,6 +128,41 @@ HeaderServerChannel::ServerFramingHandler::removeFrame(IOBufQueue* q) {
     channel_.checkSupportedClient(ct);
   }
 
+  // Check if protocol used in the buffer is consistent with the protocol
+  // id in the header.
+
+  folly::io::Cursor c(buf.get());
+  auto byte = c.read<uint8_t>();
+  // Initialize it to a value never used on the wire
+  PROTOCOL_TYPES protInBuf = PROTOCOL_TYPES::T_DEBUG_PROTOCOL;
+  if (byte == 0x82) {
+    protInBuf = PROTOCOL_TYPES::T_COMPACT_PROTOCOL;
+  } else if (byte == 0x80) {
+    protInBuf = PROTOCOL_TYPES::T_BINARY_PROTOCOL;
+  } else if (ct != THRIFT_HTTP_SERVER_TYPE) {
+    LOG(ERROR) << "Received corrupted request from client: "
+               << getTransportDebugString(channel_.getTransport()) << ". "
+               << "Corrupted payload in header message. In message header, "
+               << "protoId: " << header->getProtocolId() << ", "
+               << "clientType: " << folly::to<std::string>(ct) << ". "
+               << "First few bytes of payload: "
+               << getTHeaderPayloadString(buf.get());
+
+  }
+
+  if (protInBuf != PROTOCOL_TYPES::T_DEBUG_PROTOCOL &&
+      header->getProtocolId() != protInBuf) {
+    LOG(ERROR) << "Received corrupted request from client: "
+               << getTransportDebugString(channel_.getTransport()) << ". "
+               << "Protocol mismatch, in message header, protocolId: "
+               << folly::to<std::string>(header->getProtocolId()) << ", "
+               << "clientType: " << folly::to<std::string>(ct) << ", "
+               << "in payload, protocolId: "
+               << folly::to<std::string>(protInBuf)
+               << ". First few bytes of payload: "
+               << getTHeaderPayloadString(buf.get());
+  }
+
   // In order to allow negotiation to happen when the client requests
   // sasl but it's not supported, we don't throw an exception in the
   // sasl case.  Instead, we let the message bubble up, and check if
@@ -135,6 +171,13 @@ HeaderServerChannel::ServerFramingHandler::removeFrame(IOBufQueue* q) {
 
   header->setMinCompressBytes(channel_.getMinCompressBytes());
   return make_tuple(std::move(buf), 0, std::move(header));
+}
+
+std::string
+HeaderServerChannel::getTHeaderPayloadString(IOBuf* buf) {
+  auto len = std::min<size_t>(buf->length(), 20);
+  return folly::cEscape<std::string>(
+      folly::StringPiece((const char*)buf->data(), len));
 }
 
 std::string
@@ -156,7 +199,7 @@ HeaderServerChannel::getTransportDebugString(TAsyncTransport* transport) {
   }
 
   ret += ')';
-  return std::move(ret);
+  return ret;
 }
 
 // Client Interface
@@ -165,11 +208,9 @@ HeaderServerChannel::HeaderRequest::HeaderRequest(
       HeaderServerChannel* channel,
       unique_ptr<IOBuf>&& buf,
       unique_ptr<THeader>&& header,
-      bool outOfOrder,
       unique_ptr<sample> sample)
   : channel_(channel)
   , header_(std::move(header))
-  , outOfOrder_(outOfOrder)
   , active_(true) {
 
   this->buf_ = std::move(buf);
@@ -192,15 +233,18 @@ HeaderServerChannel::HeaderRequest::HeaderRequest(
 void HeaderServerChannel::HeaderRequest::sendReply(
     unique_ptr<IOBuf>&& buf,
     MessageChannel::SendCallback* cb) {
-  if (!outOfOrder_) {
+  // This method is only called and active_ is only touched in evb, so
+  // it is safe to use this flag from both timeout and normal responses.
+  auto& header = active_ ? header_ : timeoutHeader_;
+  if (!channel_->outOfOrder_.value()) {
     // In order processing, make sure the ordering is correct.
     if (InOrderRecvSeqId_ != channel_->lastWrittenSeqId_ + 1) {
       // Save it until we can send it in order.
       channel_->inOrderRequests_[InOrderRecvSeqId_] =
-          std::make_tuple(cb, std::move(buf), std::move(header_));
+        std::make_tuple(cb, std::move(buf), std::move(header));
     } else {
       // Send it now, and send any subsequent requests in order.
-      channel_->sendCatchupRequests(std::move(buf), cb, std::move(header_));
+      channel_->sendCatchupRequests(std::move(buf), cb, header.get());
     }
   } else {
     if (!buf) {
@@ -210,7 +254,7 @@ void HeaderServerChannel::HeaderRequest::sendReply(
     }
     try {
       // out of order, send as soon as it is done.
-      channel_->sendMessage(cb, std::move(buf), header_.get());
+      channel_->sendMessage(cb, std::move(buf), header.get());
     } catch (const std::exception& e) {
       LOG(ERROR) << "Failed to send message: " << e.what();
     }
@@ -231,35 +275,17 @@ void HeaderServerChannel::HeaderRequest::sendErrorWrapped(
   DCHECK(ew.is_compatible_with<TApplicationException>());
 
   header_->setHeader("ex", exCode);
-  ew.with_exception<TApplicationException>([&](TApplicationException& tae) {
+  ew.with_exception([&](TApplicationException& tae) {
       std::unique_ptr<folly::IOBuf> exbuf;
       uint16_t proto = header_->getProtocolId();
       auto transforms = header_->getWriteTransforms();
       try {
         exbuf = serializeError(proto, tae, getBuf());
       } catch (const TProtocolException& pe) {
-        if (pe.getType() == TProtocolException::BAD_VERSION) {
-          // TODO (haijunz): remove this since now header is per request
-          // Bad protocol, maybe because channel_->header_ contains the protocol
-          // for a later received message (because header is part of the channel
-          // and not of the request). Try with the other protocol.
-          uint16_t newproto = (proto == protocol::T_BINARY_PROTOCOL) ?
-                  protocol::T_COMPACT_PROTOCOL :
-                  protocol::T_BINARY_PROTOCOL;
-          try {
-            exbuf = serializeError(newproto, tae, getBuf());
-          } catch (const TProtocolException& pe2) {
-            LOG(ERROR) << "serializeError failed with both binary and compact."
-                << " Original proto=" << proto;
-            channel_->closeNow();
-            return;
-          }
-        } else {
-          LOG(ERROR) << "serializeError failed. type=" << pe.getType()
-              << " what()=" << pe.what();
-          channel_->closeNow();
-          return;
-        }
+        LOG(ERROR) << "serializeError failed. type=" << pe.getType()
+            << " what()=" << pe.what();
+        channel_->closeNow();
+        return;
       }
       exbuf = THeader::transform(std::move(exbuf),
                                  transforms,
@@ -268,17 +294,55 @@ void HeaderServerChannel::HeaderRequest::sendErrorWrapped(
     });
 }
 
+void HeaderServerChannel::HeaderRequest::sendTimeoutResponse(
+    MessageChannel::SendCallback* cb,
+    const std::map<std::string, std::string>& headers) {
+  // Sending tiemout response always happens on eb thread, while normal
+  // request handling might still be work-in-progress on tm thread and
+  // touches the per-request THeader at any time. This builds a new THeader
+  // and only reads certain fields from header_. To avoid race condition,
+  // DO NOT read any header from the per-request THeader.
+  timeoutHeader_ = folly::make_unique<THeader>();
+  timeoutHeader_->setProtocolId(header_->getProtocolId());
+  timeoutHeader_->setTransforms(header_->getWriteTransforms());
+  timeoutHeader_->setMinCompressBytes(header_->getMinCompressBytes());
+  timeoutHeader_->setSequenceNumber(header_->getSequenceNumber());
+  timeoutHeader_->setHeader("ex", kTaskExpiredErrorCode);
+  for (const auto& it : headers) {
+    timeoutHeader_->setHeader(it.first, it.second);
+  }
+
+  std::unique_ptr<folly::IOBuf> exbuf;
+  TApplicationException tae(
+      TApplicationException::TApplicationExceptionType::TIMEOUT,
+      "Task expired");
+  try {
+    exbuf = serializeError(timeoutHeader_->getProtocolId(), tae, getBuf());
+  } catch (const TProtocolException& pe) {
+    LOG(ERROR) << "serializeError failed. type=" << pe.getType()
+      << " what()=" << pe.what();
+    channel_->closeNow();
+    return;
+  }
+
+  exbuf = THeader::transform(std::move(exbuf),
+                             timeoutHeader_->getWriteTransforms(),
+                             timeoutHeader_->getMinCompressBytes());
+  sendReply(std::move(exbuf), cb);
+}
+
 void HeaderServerChannel::sendCatchupRequests(
     std::unique_ptr<folly::IOBuf> next_req,
     MessageChannel::SendCallback* cb,
-    std::unique_ptr<THeader> header) {
+    THeader* header) {
 
   DestructorGuard dg(this);
 
+  std::unique_ptr<THeader> header_ptr;
   while (true) {
     if (next_req) {
       try {
-        sendMessage(cb, std::move(next_req), header.get());
+        sendMessage(cb, std::move(next_req), header);
       } catch (const std::exception& e) {
         LOG(ERROR) << "Failed to send message: " << e.what();
       }
@@ -293,8 +357,9 @@ void HeaderServerChannel::sendCatchupRequests(
     if (next != inOrderRequests_.end()) {
       next_req = std::move(std::get<1>(next->second));
       cb = std::get<0>(next->second);
-      header = std::move(std::get<2>(next->second));
-      inOrderRequests_.erase(lastWrittenSeqId_ + 1);
+      header_ptr = std::move(std::get<2>(next->second));
+      header = header_ptr.get();
+      inOrderRequests_.erase(next);
     } else {
       break;
     }
@@ -320,6 +385,18 @@ void HeaderServerChannel::messageReceived(unique_ptr<IOBuf>&& buf,
 
   uint32_t recvSeqId = header->getSequenceNumber();
   bool outOfOrder = (header->getFlags() & HEADER_FLAG_SUPPORT_OUT_OF_ORDER);
+  if (!outOfOrder_.hasValue()) {
+    outOfOrder_ = outOfOrder;
+  } else if (outOfOrder_.value() != outOfOrder) {
+    LOG(ERROR) << "Channel " << (outOfOrder_.value() ? "" : "doesn't ")
+               << "support out-of-order, but received a message with the "
+               << "out-of-order bit " << (outOfOrder ? "set" : "unset");
+    messageReceiveErrorWrapped(
+        folly::make_exception_wrapper<TTransportException>(
+            "Bad out-of-order flag"));
+    return;
+  }
+
   if (!outOfOrder) {
     // Create a new seqid for in-order messages because they might not
     // be sequential.  This seqid is only used internally in HeaderServerChannel
@@ -331,7 +408,6 @@ void HeaderServerChannel::messageReceived(unique_ptr<IOBuf>&& buf,
         new HeaderRequest(this,
                           std::move(buf),
                           std::move(header),
-                          outOfOrder,
                           std::move(sample)));
 
     if (!outOfOrder) {
@@ -493,7 +569,7 @@ void HeaderServerChannel::SaslServerCallback::saslSendClient(
 
 void HeaderServerChannel::SaslServerCallback::saslError(
     folly::exception_wrapper&& ex) {
-  apache::thrift::async::HHWheelTimer::Callback::cancelTimeout();
+  folly::HHWheelTimer::Callback::cancelTimeout();
   const auto& observer = std::dynamic_pointer_cast<TServerObserver>(
     channel_.getEventBase()->getObserver());
 
@@ -550,7 +626,7 @@ void HeaderServerChannel::SaslServerCallback::saslComplete() {
     observer->saslComplete();
   }
 
-  apache::thrift::async::HHWheelTimer::Callback::cancelTimeout();
+  folly::HHWheelTimer::Callback::cancelTimeout();
   auto& saslServer = channel_.saslServer_;
   VLOG(5) << "SASL server negotiation complete: "
              << saslServer->getServerIdentity() << " <= "

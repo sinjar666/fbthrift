@@ -14,93 +14,28 @@
  * limitations under the License.
  */
 #include <thrift/lib/cpp2/async/HeaderChannel.h>
-#include <thrift/lib/cpp/TApplicationException.h>
+#include <thrift/lib/cpp2/async/RequestChannel.h>
 
-namespace apache { namespace thrift {
+namespace apache {
+namespace thrift {
 
-// We set a persistent header so we don't have to include a header in every
-// message on the wire. If clientType changes from last used (e.g. SASL
-// client connects to SASL-disabled server and falls back to non-SASL),
-// replace the header.
-void HeaderChannel::updateClientType(CLIENT_TYPE ct) {
-  if (prevClientType_ != ct) {
-    if (ct == THRIFT_HEADER_SASL_CLIENT_TYPE) {
-      setPersistentHeader("thrift_auth", "1");
-    } else if (ct == THRIFT_HEADER_CLIENT_TYPE) {
-      setPersistentHeader("thrift_auth", "0");
-    }
-    prevClientType_ = ct;
-  }
-}
+using apache::thrift::transport::THeader;
 
-void HeaderChannel::setClientType(CLIENT_TYPE ct) {
-  checkSupportedClient(ct);
-  clientType_ = ct;
-}
-
-void HeaderChannel::setSupportedClients(std::bitset<CLIENT_TYPES_LEN>
-                                  const* clients) {
-  if (clients) {
-    supported_clients = *clients;
-    // Let's support insecure Header if SASL isn't explicitly supported.
-    // It's ok for both to be supported by the caller, too.
-    if (!supported_clients[THRIFT_HEADER_SASL_CLIENT_TYPE]) {
-      supported_clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-    }
-
-    if (supported_clients[THRIFT_HEADER_SASL_CLIENT_TYPE]) {
-      setClientType(THRIFT_HEADER_SASL_CLIENT_TYPE);
-    } else {
-      setClientType(THRIFT_HEADER_CLIENT_TYPE);
-    }
-  } else {
-    setSecurityPolicy(THRIFT_SECURITY_DISABLED);
-  }
-}
-
-bool HeaderChannel::isSupportedClient(CLIENT_TYPE ct) {
-  return supported_clients[ct];
-}
-
-void HeaderChannel::checkSupportedClient(CLIENT_TYPE ct) {
-  if (!isSupportedClient(ct)) {
-    throw TApplicationException(
-        TApplicationException::UNSUPPORTED_CLIENT_TYPE,
-        "Transport does not support this client type");
-  }
-}
-
-void HeaderChannel::setSecurityPolicy(THRIFT_SECURITY_POLICY policy) {
-  std::bitset<CLIENT_TYPES_LEN> clients;
-
-  switch (policy) {
-    case THRIFT_SECURITY_DISABLED: {
-      clients[THRIFT_UNFRAMED_DEPRECATED] = true;
-      clients[THRIFT_FRAMED_DEPRECATED] = true;
-      clients[THRIFT_HTTP_SERVER_TYPE] = true;
-      clients[THRIFT_HTTP_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-      clients[THRIFT_FRAMED_COMPACT] = true;
-      break;
-    }
-    case THRIFT_SECURITY_PERMITTED: {
-      clients[THRIFT_UNFRAMED_DEPRECATED] = true;
-      clients[THRIFT_FRAMED_DEPRECATED] = true;
-      clients[THRIFT_HTTP_SERVER_TYPE] = true;
-      clients[THRIFT_HTTP_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_CLIENT_TYPE] = true;
-      clients[THRIFT_HEADER_SASL_CLIENT_TYPE] = true;
-      clients[THRIFT_FRAMED_COMPACT] = true;
-      break;
-    }
-    case THRIFT_SECURITY_REQUIRED: {
-      clients[THRIFT_HEADER_SASL_CLIENT_TYPE] = true;
-      break;
-    }
+void HeaderChannel::addRpcOptionHeaders(THeader* header,
+                                        RpcOptions& rpcOptions) {
+  if (!clientSupportHeader()) {
+    return;
   }
 
-  setSupportedClients(&clients);
-  securityPolicy_ = policy;
-}
+  if (rpcOptions.getPriority() != apache::thrift::concurrency::N_PRIORITIES) {
+    header->setHeader(transport::THeader::PRIORITY_HEADER,
+                      folly::to<std::string>(rpcOptions.getPriority()));
+  }
 
-}} //apache::thrift
+  if (rpcOptions.getTimeout() > std::chrono::milliseconds(0)) {
+    header->setHeader(transport::THeader::CLIENT_TIMEOUT_HEADER,
+                      folly::to<std::string>(rpcOptions.getTimeout().count()));
+  }
+}
+}
+} // apache::thrift

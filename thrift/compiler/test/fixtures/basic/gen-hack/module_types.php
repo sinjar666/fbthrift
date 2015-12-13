@@ -12,7 +12,7 @@ enum MyEnum: int {
 }
 type MyEnumType = MyEnum;
 
-class MyStruct implements IThriftStruct {
+class MyStruct implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     1 => array(
       'var' => 'MyIntField',
@@ -27,6 +27,10 @@ class MyStruct implements IThriftStruct {
     'MyIntField' => 1,
     'MyStringField' => 2,
   };
+  const type TShape = shape(
+    'MyIntField' => int,
+    'MyStringField' => string,
+  );
   const int STRUCTURAL_ID = 4929291502389600438;
   public int $MyIntField;
   public string $MyStringField;
@@ -48,6 +52,41 @@ class MyStruct implements IThriftStruct {
     return 'MyStruct';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    if (!array_key_exists('MyIntField', $shape_data)) {
+      $shape_data['MyIntField'] = 0;
+    }
+    if (!is_int($shape_data['MyIntField'])) {
+      return null;
+    }
+
+    if (!array_key_exists('MyStringField', $shape_data)) {
+      $shape_data['MyStringField'] = '';
+    }
+    if (!is_string($shape_data['MyStringField'])) {
+      return null;
+    }
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    $me->MyIntField = $shape['MyIntField'];
+    $me->MyStringField = $shape['MyStringField'];
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+      'MyIntField' => $this->MyIntField,
+      'MyStringField' => $this->MyStringField,
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';

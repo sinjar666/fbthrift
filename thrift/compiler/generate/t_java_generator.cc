@@ -17,7 +17,7 @@
  * under the License.
  */
 
-#include "thrift/compiler/generate/t_java_generator.h"
+#include <thrift/compiler/generate/t_java_generator.h>
 
 #include <sstream>
 #include <string>
@@ -29,7 +29,7 @@
 #include <sys/stat.h>
 #include <stdexcept>
 
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/platform.h>
 using namespace std;
 
 
@@ -157,7 +157,7 @@ void t_java_generator::close_generator() {}
  *
  * @param ttypedef The type definition
  */
-void t_java_generator::generate_typedef(t_typedef* ttypedef) {}
+void t_java_generator::generate_typedef(t_typedef* /*ttypedef*/) {}
 
 /**
  * Enums are a class with a set of static constants.
@@ -306,8 +306,8 @@ void t_java_generator::print_const_value(std::ostream& out, string name,
   } else if (type->is_struct() || type->is_xception()) {
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     out << name << " = new " << type_name(type, false, true) << "();" << endl;
     if (!in_static) {
       indent(out) << "static {" << endl;
@@ -341,8 +341,8 @@ void t_java_generator::print_const_value(std::ostream& out, string name,
     }
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       string key = render_const_value(out, name, ktype, v_iter->first);
       string val = render_const_value(out, name, vtype, v_iter->second);
@@ -381,7 +381,7 @@ void t_java_generator::print_const_value(std::ostream& out, string name,
   }
 }
 
-string t_java_generator::render_const_value(ostream& out, string name,
+string t_java_generator::render_const_value(ostream& out, string /*name*/,
     t_type* type, t_const_value* value) {
   type = get_true_type(type);
   std::ostringstream render;
@@ -844,7 +844,8 @@ void t_java_generator::generate_get_field_desc(ofstream& out, t_struct* tstruct)
   indent(out) << "}" << endl;
 }
 
-void t_java_generator::generate_get_struct_desc(ofstream& out, t_struct* tstruct) {
+void t_java_generator::generate_get_struct_desc(ofstream& out,
+                                                t_struct* /*tstruct*/) {
   indent(out) << "@Override" << endl;
   indent(out) << "protected TStruct getStructDesc() {" << endl;
   indent(out) << "  return STRUCT_DESC;" << endl;
@@ -881,7 +882,8 @@ void t_java_generator::generate_union_comparisons(ofstream& out, t_struct* tstru
   }
 }
 
-void t_java_generator::generate_union_hashcode(ofstream& out, t_struct* tstruct) {
+void t_java_generator::generate_union_hashcode(ofstream& out,
+                                               t_struct* /*tstruct*/) {
   if (gen_hash_code_) {
     indent(out) << "@Override" << endl;
     indent(out) << "public int hashCode() {" << endl;
@@ -1777,7 +1779,7 @@ void t_java_generator::generate_java_bean_boilerplate(ofstream& out,
 
 
 void t_java_generator::generate_default_toString(ofstream& out,
-    t_struct* tstruct) {
+    t_struct* /*tstruct*/) {
   out << indent() << "@Override" << endl <<
     indent() << "public String toString() {" << endl;
   indent_up();
@@ -3124,7 +3126,7 @@ void t_java_generator::generate_serialize_field(ofstream& out,
  * @param prefix  String prefix to attach to all fields
  */
 void t_java_generator::generate_serialize_struct(ofstream& out,
-                                                 t_struct* tstruct,
+                                                 t_struct* /*tstruct*/,
                                                  string prefix) {
   out <<
     indent() << prefix << ".write(oprot);" << endl;
@@ -3213,7 +3215,7 @@ void t_java_generator::generate_serialize_container(ofstream& out,
 void t_java_generator::generate_serialize_map_element(ofstream& out,
                                                       t_map* tmap,
                                                       string iter,
-                                                      string map) {
+                                                      string /*map*/) {
   t_field kfield(tmap->get_key_type(), iter + ".getKey()");
   generate_serialize_field(out, &kfield, "");
   t_field vfield(tmap->get_val_type(), iter + ".getValue()");
@@ -3416,7 +3418,11 @@ string t_java_generator::function_signature_async(t_function* tfunction, string 
   return result;
 }
 
-string t_java_generator::async_function_call_arglist(t_function* tfunc, string result_handler_symbol, bool use_base_method, bool include_types) {
+string t_java_generator::async_function_call_arglist(
+    t_function* tfunc,
+    string result_handler_symbol,
+    bool /*use_base_method*/,
+    bool include_types) {
   std::string arglist = "";
   if (tfunc->get_arglist()->get_members().size() > 0) {
     arglist = argument_list(tfunc->get_arglist(), include_types) + ", ";
@@ -3453,7 +3459,11 @@ string t_java_generator::argument_list(t_struct* tstruct, bool include_types) {
   return result;
 }
 
-string t_java_generator::async_argument_list(t_function* tfunct, t_struct* tstruct, string result_handler_symbol, bool include_types) {
+string t_java_generator::async_argument_list(
+    t_function* /*tfunct*/,
+    t_struct* tstruct,
+    string result_handler_symbol,
+    bool include_types) {
   string result = "";
   const vector<t_field*>& fields = tstruct->get_members();
   vector<t_field*>::const_iterator f_iter;

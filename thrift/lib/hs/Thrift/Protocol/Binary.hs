@@ -31,7 +31,9 @@ import Control.Exception ( throw )
 import Control.Monad
 import Data.Bits
 import Data.ByteString.Builder
+#if __GLASGOW_HASKELL__ < 710
 import Data.Functor
+#endif
 import Data.Int
 import Data.Monoid
 import Data.Word
@@ -63,6 +65,7 @@ version1 = fromIntegral (0x80010000 :: Word32)
 -- encoding to and decoding from are in BIG ENDIAN format, and converts the
 -- endianness as necessary to match the local machine.
 instance Protocol BinaryProtocol where
+    mkProtocol = BinaryProtocol
     getTransport (BinaryProtocol t) = t
 
     writeMessage p (n, t, s) = (writeMessageBegin >>)

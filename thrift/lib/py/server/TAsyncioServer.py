@@ -14,7 +14,6 @@ from thrift.Thrift import TProcessor, TMessageType, TApplicationException
 from thrift.transport.TTransport import TTransportBase, TTransportException
 from thrift.transport.THeaderTransport import THeaderTransport
 from thrift.protocol.THeaderProtocol import (
-    THeaderProtocol,
     THeaderProtocolFactory,
 )
 
@@ -28,9 +27,20 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+# We support the deprecated FRAMED transport for old fb303
+# clients that were otherwise failing miserably.
+THEADER_CLIENT_TYPES = {
+    THeaderTransport.HEADERS_CLIENT_TYPE,
+    THeaderTransport.FRAMED_DEPRECATED,
+}
+_default_thpfactory = THeaderProtocolFactory(client_types=THEADER_CLIENT_TYPES)
+THeaderProtocol = _default_thpfactory.getProtocol
+
+
 @asyncio.coroutine
 def ThriftAsyncServerFactory(
-    processor, *, interface=None, port=0, loop=None, nthreads=None, sock=None
+    processor, *, interface=None, port=0, loop=None, nthreads=None, sock=None,
+    backlog=100
 ):
     """
     ThriftAsyncServerFactory(processor) -> asyncio.Server
@@ -96,6 +106,7 @@ def ThriftAsyncServerFactory(
         interface,
         port,
         sock=sock,
+        backlog=backlog,
     )
 
     if server.sockets:
@@ -105,9 +116,10 @@ def ThriftAsyncServerFactory(
     return server
 
 
-def ThriftClientProtocolFactory(client_class, loop=None, timeouts=None):
+def ThriftClientProtocolFactory(client_class, loop=None, timeouts=None,
+        client_type=None):
     return functools.partial(
-        ThriftHeaderClientProtocol, client_class, loop, timeouts,
+        ThriftHeaderClientProtocol, client_class, loop, timeouts, client_type
     )
 
 
@@ -247,6 +259,29 @@ class TWriteOnlyBuffer(TTransportBase):
         self._io = BytesIO()
 
 
+class TReadWriteBuffer(TTransportBase):
+    def __init__(self, value=b""):
+        self._read_io = TReadOnlyBuffer(value=value)
+        self._write_io = TWriteOnlyBuffer()
+        self.read = self._read_io.read
+        self.write = self._write_io.write
+        self.getvalue = self._write_io.getvalue
+        self.reset()
+
+    def isOpen(self):
+        return self._read_io._open and self._write_io._open
+
+    def close(self):
+        self._read_io.close()
+        self._write_io.close()
+
+    def reset(self):
+        self._read_io.reset()
+        self._write_io.reset()
+
+    # Note: read()/write()/getvalue() methods are bound in __init__().
+
+
 class WrappedTransport(TWriteOnlyBuffer):
 
     def __init__(self, trans, proto):
@@ -277,7 +312,10 @@ class ThriftHeaderClientProtocol(FramedProtocol):
     DEFAULT_TIMEOUT = 60.0
     _exception_serializer = None
 
-    def __init__(self, client_class, loop=None, timeouts=None):
+    def __init__(self, client_class,
+                 loop=None,
+                 timeouts=None,
+                 client_type=None):
         super().__init__(loop=loop)
         self._client_class = client_class
         self.client = None
@@ -288,6 +326,7 @@ class ThriftHeaderClientProtocol(FramedProtocol):
         self.timeouts = defaultdict(lambda: default_timeout)
         self.timeouts.update(timeouts)
         self.pending_tasks = {}
+        self.client_type = client_type
 
     def connection_made(self, transport):
         assert self.transport is None, "Transport already instantiated here."
@@ -299,7 +338,7 @@ class ThriftHeaderClientProtocol(FramedProtocol):
         self.client = self._client_class(
             self.thrift_transport,
             WrappedTransportFactory(self),
-            THeaderProtocolFactory())
+            THeaderProtocolFactory(client_type=self.client_type))
 
     def connection_lost(self, exc):
         for fut in self.client._futures.values():
@@ -402,23 +441,18 @@ class ThriftHeaderServerProtocol(FramedProtocol):
 
     @asyncio.coroutine
     def message_received(self, frame):
-        # We support the deprecated FRAMED transport for old fb303
-        # clients that were otherwise failing miserably.
-        client_types = {
-            THeaderTransport.HEADERS_CLIENT_TYPE,
-            THeaderTransport.FRAMED_DEPRECATED,
-        }
-
-        ibuf = TReadOnlyBuffer(frame)
-        iprot = THeaderProtocol(ibuf, client_types=client_types)
-        obuf = TWriteOnlyBuffer()
-        oprot = THeaderProtocol(obuf, client_types=client_types)
+        # Note: we are using a single `prot` for in and out so that
+        # we can support legacy clients that only understand FRAMED.
+        # The discovery of what the client supports happens in iprot's
+        # transport so we have to reuse a single one here.
+        buf = TReadWriteBuffer(frame)
+        prot = THeaderProtocol(buf)
 
         try:
             yield from self.processor.process(
-                iprot, oprot, self.server_context,
+                prot, prot, self.server_context,
             )
-            msg = obuf.getvalue()
+            msg = buf.getvalue()
             if len(msg) > 0:
                 self.transport.write(msg)
         except Exception:

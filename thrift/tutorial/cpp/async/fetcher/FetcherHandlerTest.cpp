@@ -19,8 +19,8 @@
 #include <thrift/lib/cpp/transport/TServerSocket.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
-#include "thrift/tutorial/cpp/async/fetcher/gen-cpp2/Fetcher.h"
-#include "thrift/tutorial/cpp/async/fetcher/FetcherHandler.h"
+#include <thrift/tutorial/cpp/async/fetcher/gen-cpp2/Fetcher.h>
+#include <thrift/tutorial/cpp/async/fetcher/FetcherHandler.h>
 
 #include <gtest/gtest.h>
 
@@ -51,7 +51,7 @@ TEST_F(FetcherHandlerTest, example_pass) {
     {"/bar", "<html><head></head><body></body></html>"},
   };
   auto sock = make_shared<transport::TServerSocket>(0);
-  sock->setAcceptTimeout(10);
+  sock->setAcceptTimeout(1000);
   sock->listen();
   auto listen = thread([=] {
       while (true) {

@@ -16,7 +16,6 @@
 
 #include <thrift/lib/cpp/util/THttpParser.h>
 
-#include <folly/io/IOBufQueue.h>
 #include <thrift/lib/cpp/transport/TTransportException.h>
 #include <cstdlib>
 #include <sstream>
@@ -118,6 +117,28 @@ bool THttpParser::readDataAvailable(size_t len) {
       return false;
     }
   }
+}
+
+int THttpParser::getMinBytesRequired() {
+  size_t avail;
+  switch (state_) {
+    case HTTP_PARSE_START:
+      return 0;
+
+    case HTTP_PARSE_HEADER:
+    case HTTP_PARSE_CHUNK:
+    case HTTP_PARSE_CHUNKFOOTER:
+    case HTTP_PARSE_TRAILING:
+      // Don't know exactly how much we'll need, but at least 1 more byte
+      return 1;
+
+    case HTTP_PARSE_CONTENT:
+      CHECK_LE(httpPos_, httpBufLen_);
+      avail = httpBufLen_ - httpPos_;
+      return std::max<int>(0, contentLength_ - avail);
+  }
+
+  throw TTransportException("Unknown state");
 }
 
 char* THttpParser::readLine() {
@@ -346,13 +367,14 @@ bool THttpClientParser::isConnectClosedByServer() {
 
 unique_ptr<IOBuf> THttpClientParser::constructHeader(unique_ptr<IOBuf> buf) {
   std::map<std::string, std::string> empty;
-  return constructHeader(std::move(buf), empty, empty);
+  return constructHeader(std::move(buf), empty, empty, &empty);
 }
 
 unique_ptr<IOBuf> THttpClientParser::constructHeader(
    unique_ptr<IOBuf> buf,
    const std::map<std::string, std::string>& persistentWriteHeaders,
-   const std::map<std::string, std::string>& writeHeaders) {
+   const std::map<std::string, std::string>& writeHeaders,
+   const std::map<std::string, std::string>* extraWriteHeaders) {
   IOBufQueue queue;
   queue.append("POST ");
   queue.append(path_);
@@ -372,26 +394,29 @@ unique_ptr<IOBuf> THttpClientParser::constructHeader(
   string contentLen = std::to_string(buf->computeChainDataLength());
   queue.append(contentLen);
   queue.append(CRLF);
-  // write persistent headers
-  for (const auto& persistentWriteHeader : persistentWriteHeaders) {
-    queue.append(persistentWriteHeader.first);
 
-    queue.append(": ");
-    queue.append(persistentWriteHeader.second);
-    queue.append(CRLF);
+  THttpClientParser::appendHeadersToQueue(queue, persistentWriteHeaders);
+  THttpClientParser::appendHeadersToQueue(queue, writeHeaders);
+  if (extraWriteHeaders) {
+    THttpClientParser::appendHeadersToQueue(queue, *extraWriteHeaders);
   }
-  // write non-persistent headers
-  for (const auto& writeHeader : writeHeaders) {
-    queue.append(writeHeader.first);
-    queue.append(": ");
-    queue.append(writeHeader.second);
-    queue.append(CRLF);
-  }
+
   queue.append(CRLF);
 
   auto res = queue.move();
   res->appendChain(std::move(buf));
-  return std::move(res);
+  return res;
+}
+
+void THttpClientParser::appendHeadersToQueue(
+  folly::IOBufQueue& queue,
+  const std::map<std::string, std::string>& headersToAppend) {
+  for (const auto& headerToAppend : headersToAppend) {
+    queue.append(headerToAppend.first);
+    queue.append(": ");
+    queue.append(headerToAppend.second);
+    queue.append(CRLF);
+  }
 }
 
 }}}

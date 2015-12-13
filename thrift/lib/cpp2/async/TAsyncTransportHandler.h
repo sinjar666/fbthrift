@@ -93,12 +93,13 @@ class TAsyncTransportHandler
     return future;
   };
 
+  folly::Future<folly::Unit> writeException(Context*,
+                                            folly::exception_wrapper) override {
+    return shutdown(true);
+  }
+
   folly::Future<folly::Unit> close(Context* /*ctx*/) override {
-    if (transport_) {
-      detachReadCallback();
-      transport_->closeNow();
-    }
-    return folly::makeFuture();
+    return shutdown(false);
   }
 
   // Must override to avoid warnings about hidden overloaded virtual due to
@@ -121,6 +122,14 @@ class TAsyncTransportHandler
     getContext()->fireRead(bufQueue_);
   }
 
+  bool isBufferMovable() noexcept override { return true; }
+
+  void readBufferAvailable(
+      std::unique_ptr<folly::IOBuf> buf) noexcept override {
+    bufQueue_.append(std::move(buf));
+    getContext()->fireRead(bufQueue_);
+  }
+
   void readEOF() noexcept override {
     getContext()->fireReadEOF();
   }
@@ -133,6 +142,18 @@ class TAsyncTransportHandler
   }
 
  private:
+  folly::Future<folly::Unit> shutdown(bool closeWithReset) {
+    if (transport_) {
+      detachReadCallback();
+      if (closeWithReset) {
+        transport_->closeWithReset();
+      } else {
+        transport_->closeNow();
+      }
+    }
+    return folly::makeFuture();
+  }
+
   class WriteCallback : private async::TAsyncTransport::WriteCallback {
     void writeSuccess() noexcept override {
       promise_.setValue();

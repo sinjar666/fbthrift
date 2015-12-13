@@ -23,7 +23,7 @@
 #include <sstream>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
-#include "thrift/tutorial/gen-cpp2/Calculator.h"
+#include <thrift/tutorial/gen-cpp2/Calculator.h>
 
 using namespace std;
 using namespace apache::thrift;
@@ -43,7 +43,11 @@ class CalculatorHandler : public CalculatorSvIf {
   }
 
   int32_t calculate(const int32_t logid, const Work &work) {
-    printf("calculate(%d,{%d,%d,%d})\n", logid, work.op, work.num1, work.num2);
+    printf("calculate(%d,{%d,%d,%d})\n",
+           logid,
+           static_cast<int32_t>(work.op),
+           work.num1,
+           work.num2);
     int32_t val;
 
     switch (work.op) {

@@ -17,6 +17,9 @@
  * under the License.
  */
 
+#include <utility>
+#include <vector>
+
 namespace thrift { namespace compiler { namespace py { namespace conv {
 
 template <class T>
@@ -40,11 +43,25 @@ struct indexVec {
   }
 };
 
+
 template <class T, class U>
 struct indexMap {
+  typedef map<T, U> Map;
+
+  struct iteration_helper {
+    static list keys(Map const& self) {
+      list t;
+      for (const auto& v : self)
+        t.append(v.first);
+      return t;
+    }
+  };
+
   indexMap(char const* name) {
-    class_<map<T, U>> (name)
-      .def(map_indexing_suite<map<T, U>>());
+    class_<Map> (name)
+      .def(map_indexing_suite<Map>())
+      .def("keys", &iteration_helper::keys)
+      ;
   }
 };
 
@@ -56,13 +73,13 @@ const T& TO(const U& from) {
 // Assumes Key and Val are pointers.
 template<class Key, class Val>
 struct map_item {
-  typedef std::map<Key,Val> Map;
+  typedef std::vector<std::pair<Key,Val>> Map;
 
   static list items(Map const& self) {
     list t;
-    for(typename Map::const_iterator it=self.begin(); it!=self.end(); ++it)
-      t.append( boost::python::make_tuple(boost::ref(it->first),
-                                          boost::ref(it->second)));
+    for (const auto& v : self)
+      t.append( boost::python::make_tuple(boost::ref(v.first),
+                                          boost::ref(v.second)));
     return t;
   }
 };

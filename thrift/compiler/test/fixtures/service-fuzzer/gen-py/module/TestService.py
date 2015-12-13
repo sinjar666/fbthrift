@@ -22,13 +22,6 @@ from thrift.protocol import TBinaryProtocol
 from thrift.protocol import TCompactProtocol
 from thrift.protocol import THeaderProtocol
 try:
-  from thrift.protocol import fastbinary
-  if fastbinary.version < 2:
-    fastbinary = None
-    warnings.warn("Disabling fastbinary, need at least version 2")
-except:
-  fastbinary = None
-try:
   from thrift.protocol import fastproto
 except:
   fastproto = None
@@ -117,9 +110,6 @@ class init_args:
     return False
 
   def read(self, iprot):
-    if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and iprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
-      fastbinary.decode_binary(self, iprot.trans, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS)
-      return
     if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and iprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastproto is not None:
       fastproto.decode(self, iprot.trans, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS, protoid=0)
       return
@@ -217,9 +207,6 @@ class init_args:
     iprot.readStructEnd()
 
   def write(self, oprot):
-    if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and oprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and self.thrift_spec is not None and fastbinary is not None:
-      oprot.trans.write(fastbinary.encode_binary(self, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS))
-      return
     if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and oprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and self.thrift_spec is not None and fastproto is not None:
       oprot.trans.write(fastproto.encode(self, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS, protoid=0))
       return
@@ -297,8 +284,8 @@ class init_args:
   def __repr__(self):
     L = []
     for key, value in six.iteritems(self.__dict__):
-      padding = ' ' * (len(key) + 1)
-      value = pprint.pformat(value)
+      padding = ' ' * 4
+      value = pprint.pformat(value, indent=0)
       value = padding.join(value.splitlines(True))
       L.append('    %s=%s' % (key, value))
     return "%s(\n%s)" % (self.__class__.__name__, ",\n".join(L))
@@ -373,9 +360,6 @@ class init_result:
     return False
 
   def read(self, iprot):
-    if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and iprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
-      fastbinary.decode_binary(self, iprot.trans, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS)
-      return
     if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and iprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastproto is not None:
       fastproto.decode(self, iprot.trans, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS, protoid=0)
       return
@@ -398,9 +382,6 @@ class init_result:
     iprot.readStructEnd()
 
   def write(self, oprot):
-    if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and oprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and self.thrift_spec is not None and fastbinary is not None:
-      oprot.trans.write(fastbinary.encode_binary(self, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS))
-      return
     if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and oprot.get_protocol_id() == THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) and self.thrift_spec is not None and fastproto is not None:
       oprot.trans.write(fastproto.encode(self, [self.__class__, self.thrift_spec, False], utf8strings=UTF8STRINGS, protoid=0))
       return
@@ -418,8 +399,8 @@ class init_result:
   def __repr__(self):
     L = []
     for key, value in six.iteritems(self.__dict__):
-      padding = ' ' * (len(key) + 1)
-      value = pprint.pformat(value)
+      padding = ' ' * 4
+      value = pprint.pformat(value, indent=0)
       value = padding.join(value.splitlines(True))
       L.append('    %s=%s' % (key, value))
     return "%s(\n%s)" % (self.__class__.__name__, ",\n".join(L))
@@ -517,11 +498,18 @@ class Client(Iface):
 
 
 class Processor(Iface, TProcessor):
+  _onewayMethods = ()
+
   def __init__(self, handler):
     TProcessor.__init__(self)
     self._handler = handler
     self._processMap = {}
     self._processMap["init"] = Processor.process_init
+
+  def onewayMethods(self):
+    l = []
+    l.extend(Processor._onewayMethods)
+    return tuple(l)
 
   @process_main()
   def process(self,): pass
@@ -540,11 +528,18 @@ class Processor(Iface, TProcessor):
 Iface._processor_type = Processor
 
 class ContextProcessor(ContextIface, TProcessor):
+  _onewayMethods = ()
+
   def __init__(self, handler):
     TProcessor.__init__(self)
     self._handler = handler
     self._processMap = {}
     self._processMap["init"] = ContextProcessor.process_init
+
+  def onewayMethods(self):
+    l = []
+    l.extend(ContextProcessor._onewayMethods)
+    return tuple(l)
 
   @process_main()
   def process(self,): pass

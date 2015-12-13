@@ -73,9 +73,9 @@ class CompactProtocolReaderWithRefill : public VirtualCompactReader {
     explicit CompactProtocolReaderWithRefill(Refiller refiller)
       : VirtualCompactReader(refiller) {}
 
-    inline uint32_t readMessageBegin(std::string& name,
-                                     MessageType& messageType,
-                                     int32_t& seqid) override {
+    inline uint32_t readMessageBegin(std::string& /*name*/,
+                                     MessageType& /*messageType*/,
+                                     int32_t& /*seqid*/) override {
       // Only called in python so leave it unimplemented.
       throw std::runtime_error("not implemented");
     }
@@ -189,19 +189,16 @@ class CompactProtocolReaderWithRefill : public VirtualCompactReader {
      * start all over again.
      **/
     void ensureInteger(int idx = 0) {
-      while (true) {
-        if (protocol_.in_.length() - idx >= 10) {
-          return;
-        }
-
+      while (protocol_.in_.length() - idx < 10) {
         if (protocol_.in_.length() <= idx) {
           ensureBuffer(idx + 1);
         } else {
           auto avail = protocol_.in_.peek();
           const uint8_t *b = avail.first + idx;
-          while (idx++ < avail.second) {
+          while (idx < avail.second) {
             if (!(*b++ & 0x80))
               return;
+            idx++;
           }
 
           ensureBuffer(avail.second + 1);
@@ -249,9 +246,8 @@ class CompactProtocolReaderWithRefill : public VirtualCompactReader {
           break;
         bytes++;
       }
-      if (bytes == 1 || bytes != avail.second) {
-        return;
-      } else { // Still need 1 more byte to read key/value type
+      // Non-empty maps have an additional byte for the key/value type.
+      if (bytes == avail.second && *avail.first) {
         ensureBuffer(avail.second + 1);
       }
     }
@@ -261,6 +257,7 @@ class CompactProtocolReaderWithRefill : public VirtualCompactReader {
       if (protocol_.in_.length() >= 11)
         return;
 
+      ensureBuffer(1);
       auto avail = protocol_.in_.peek();
       const uint8_t *b = avail.first;
       int8_t size_and_type = folly::Endian::big(*b);
@@ -297,14 +294,14 @@ class BinaryProtocolReaderWithRefill : public VirtualBinaryReader {
     explicit BinaryProtocolReaderWithRefill(Refiller refiller)
       : VirtualBinaryReader(refiller) {}
 
-    inline uint32_t readMessageBegin(std::string& name,
-                                     MessageType& messageType,
-                                     int32_t& seqid) override {
+    inline uint32_t readMessageBegin(std::string& /*name*/,
+                                     MessageType& /*messageType*/,
+                                     int32_t& /*seqid*/) override {
       // This is only called in python so leave it unimplemented.
       throw std::runtime_error("not implemented");
     }
 
-    inline uint32_t readFieldBegin(std::string& name,
+    inline uint32_t readFieldBegin(std::string& /*name*/,
                                    TType& fieldType,
                                    int16_t& fieldId) override {
       uint32_t result = 0;

@@ -17,13 +17,16 @@ static void reflectionInitializer_16163282776448022760(::apache::thrift::reflect
   dt.name = "enum module.Company";
   schema.names[dt.name] = id;
   dt.__isset.enumValues = true;
-  dt.enumValues["FACEBOOK"] = 0;
-  dt.enumValues["INSTAGRAM"] = 3;
-  dt.enumValues["OCULUS"] = 2;
-  dt.enumValues["WHATSAPP"] = 1;
+  static const std::pair<const char*, int32_t> enumValues[] = {
+    {"FACEBOOK", 0},
+    {"INSTAGRAM", 3},
+    {"OCULUS", 2},
+    {"WHATSAPP", 1},
+  };
+  dt.enumValues.insert(boost::container::ordered_unique_range_t(), enumValues, enumValues + 4);
 }
 
-void  reflectionInitializer_16163282776448022760(::apache::thrift::reflection::Schema&);  // enum module.Company
+static void  reflectionInitializer_16163282776448022760(::apache::thrift::reflection::Schema&);  // enum module.Company
 // Reflection initializer for struct module.Internship
 void reflectionInitializer_9022508676980868684(::apache::thrift::reflection::Schema& schema) {
   const uint64_t id = 9022508676980868684U;
@@ -48,12 +51,36 @@ void reflectionInitializer_9022508676980868684(::apache::thrift::reflection::Sch
   }
   {
     ::apache::thrift::reflection::StructField& f = dt.fields[3];
-    f.isRequired = true;
+    f.isRequired = false;
     f.type = 16163282776448022760U;
     f.name = "employer";
     f.order = 2;
   }
   reflectionInitializer_16163282776448022760(schema);  // enum module.Company
+}
+
+// Reflection initializer for struct module.Range
+void reflectionInitializer_7757081658652615948(::apache::thrift::reflection::Schema& schema) {
+  const uint64_t id = 7757081658652615948U;
+  if (schema.dataTypes.count(id)) return;
+  ::apache::thrift::reflection::DataType& dt = schema.dataTypes[id];
+  dt.name = "struct module.Range";
+  schema.names[dt.name] = id;
+  dt.__isset.fields = true;
+  {
+    ::apache::thrift::reflection::StructField& f = dt.fields[1];
+    f.isRequired = true;
+    f.type = 5U;
+    f.name = "min";
+    f.order = 0;
+  }
+  {
+    ::apache::thrift::reflection::StructField& f = dt.fields[2];
+    f.isRequired = true;
+    f.type = 5U;
+    f.name = "max";
+    f.order = 1;
+  }
 }
 
 }

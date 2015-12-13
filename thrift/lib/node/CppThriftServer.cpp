@@ -23,7 +23,7 @@
 #include <thrift/lib/cpp/concurrency/FunctionRunner.h>
 
 using namespace v8;
-apache::thrift::async::TEventBase integrated_uv_event_base;
+folly::EventBase integrated_uv_event_base;
 
 void run_loop(uv_async_t *handle, int status) {
   integrated_uv_event_base.loop();
@@ -75,10 +75,14 @@ class ThriftServerCallback : public node::ObjectWrap {
     Local<Object> bufferObj = args[0]->ToObject();
     char* bufferData = node::Buffer::Data(bufferObj);
     size_t bufferLen = node::Buffer::Length(bufferObj);
-    auto iobuf = folly::makeMoveWrapper(
-      folly::IOBuf::copyBuffer(bufferData, bufferLen));
+    auto iobuf =
+      apache::thrift::transport::THeader::transform(
+        folly::IOBuf::copyBuffer(bufferData, bufferLen),
+        obj->reqCtx_->getHeader()->getWriteTransforms(),
+        obj->reqCtx_->getHeader()->getMinCompressBytes());
+    auto iobufMw = folly::makeMoveWrapper(std::move(iobuf));
     obj->eb_->runInEventBaseThread([=]() mutable {
-        (*r)->sendReply(std::move(*iobuf));
+        (*r)->sendReply(std::move(*iobufMw));
     });
     return args.This();
   }
@@ -86,15 +90,18 @@ class ThriftServerCallback : public node::ObjectWrap {
   static void setRequest(
       Local<Object> arg,
       std::unique_ptr<apache::thrift::ResponseChannel::Request> req,
-      apache::thrift::async::TEventBase* base) {
+      apache::thrift::Cpp2RequestContext* reqCtx,
+      folly::EventBase* base) {
     auto obj = ObjectWrap::Unwrap<ThriftServerCallback>(arg);
     obj->req_ = std::move(req);
     obj->eb_ = base;
+    obj->reqCtx_ = reqCtx;
   }
 
  private:
   std::unique_ptr<apache::thrift::ResponseChannel::Request> req_;
-  apache::thrift::async::TEventBase* eb_;
+  folly::EventBase* eb_;
+  apache::thrift::Cpp2RequestContext* reqCtx_;
 };
 
 Persistent<Function> ThriftServerCallback::constructor;
@@ -111,7 +118,7 @@ class NodeProcessor : public apache::thrift::AsyncProcessor {
                std::unique_ptr<folly::IOBuf> buf,
                apache::thrift::protocol::PROTOCOL_TYPES protType,
                apache::thrift::Cpp2RequestContext* context,
-               apache::thrift::async::TEventBase* eb,
+               folly::EventBase* eb,
                apache::thrift::concurrency::ThreadManager* tm) override {
 
     auto reqd = folly::makeMoveWrapper(std::move(req));
@@ -142,7 +149,11 @@ class NodeProcessor : public apache::thrift::AsyncProcessor {
           3, constructorArgs);
 
         auto callback = ThriftServerCallback::NewInstance();
-        ThriftServerCallback::setRequest(callback, std::move(*reqd), eb);
+        ThriftServerCallback::setRequest(
+          callback,
+          std::move(*reqd),
+          context,
+          eb);
 
         const unsigned argc = 3;
         Local<Value> argv[argc] = {

@@ -21,6 +21,8 @@
 #include <thrift/lib/cpp/async/TAsyncSocket.h>
 #include <thrift/lib/cpp/async/TAsyncSSLSocket.h>
 #include <thrift/lib/cpp/concurrency/Util.h>
+#include <wangle/acceptor/SSLAcceptorHandshakeHelper.h>
+#include <wangle/acceptor/UnencryptedAcceptorHandshakeHelper.h>
 
 
 #include <iostream>
@@ -48,7 +50,7 @@ using std::shared_ptr;
 using apache::thrift::concurrency::Util;
 
 void Cpp2Worker::onNewConnection(
-  folly::AsyncSocket::UniquePtr sock,
+  folly::AsyncTransportWrapper::UniquePtr sock,
   const folly::SocketAddress* addr,
   const std::string& nextProtocolName,
   SecureTransportType secureProtocolType,
@@ -60,6 +62,7 @@ void Cpp2Worker::onNewConnection(
        server_->maxConnections_ / server_->nWorkers_) ) {
     if (observer) {
       observer->connDropped();
+      observer->connRejected();
     }
     return;
   }
@@ -91,12 +94,9 @@ void Cpp2Worker::useExistingChannel(
 
   auto conn = std::make_shared<Cpp2Connection>(
       nullptr, &address, this, serverChannel);
-  Acceptor::getConnectionManager()->addConnection(conn.get(), false);
+  Acceptor::getConnectionManager()
+    ->addConnection(conn.get(), false);
   conn->addConnection(conn);
-
-  DCHECK(!eventBase_);
-  // Use supplied event base and don't delete it when finished
-  eventBase_ = serverChannel->getEventBase();
 
   conn->start();
 }
@@ -122,6 +122,66 @@ int Cpp2Worker::pendingCount() {
 
 int Cpp2Worker::getPendingCount() const {
   return pendingCount_;
+}
+
+bool Cpp2Worker::looksLikeTLS(std::array<uint8_t, kPeekCount>& bytes) {
+  // TLS starts as
+  // 0: 0x16 - handshake protocol magic
+  // 1: 0x03 - SSL version major
+  // 2: 0x00 to 0x03 - SSL version minor (SSLv3 or TLS1.0 through TLS1.2)
+  // 3-4: length (2 bytes)
+  // 5: 0x01 - handshake type (ClientHello)
+  // 6-8: handshake len (3 bytes), equals value from offset 3-4 minus 4
+
+  // Framed binary starts as
+  // 0-3: frame len
+  // 4: 0x80 - binary magic
+  // 5: 0x01 - protocol version
+  // 6-7: various
+  // 8-11: method name len
+
+  // Other Thrift transports/protocols can't conflict because they don't have
+  // 16-03-01 at offsets 0-1-5.
+
+  // Definitely not TLS
+  if (bytes[0] != 0x16 || bytes[1] != 0x03 || bytes[5] != 0x01) {
+    return false;
+  }
+
+  // This is most likely TLS, but could be framed binary, which has 80-01
+  // at offsets 4-5.
+  if (bytes[4] == 0x80 && bytes[8] != 0x7c) {
+    // Binary will have the method name length at offsets 8-11, which must be
+    // smaller than the frame length at 0-3, so byte 8 is <=  byte 0,
+    // which is 0x16.
+    // However, for TLS, bytes 6-8 (24 bits) are the length of the
+    // handshake protocol and this value is 4 less than the record-layer
+    // length at offset 3-4 (16 bits), so byte 8 equals 0x7c (0x80 - 4),
+    // which is not smaller than 0x16
+    return false;
+  }
+
+  return true;
+}
+
+wangle::AcceptorHandshakeHelper::UniquePtr
+Cpp2Worker::PeekingCallback::getHelper(
+    std::array<uint8_t, kPeekCount> bytes,
+    wangle::Acceptor* acceptor,
+    const folly::SocketAddress& clientAddr,
+    std::chrono::steady_clock::time_point acceptTime,
+    wangle::TransportInfo& tinfo) {
+  if (looksLikeTLS(bytes)) {
+    return wangle::AcceptorHandshakeHelper::UniquePtr(
+        new wangle::SSLAcceptorHandshakeHelper(
+            acceptor,
+            clientAddr,
+            acceptTime,
+            tinfo));
+  } else {
+    return wangle::AcceptorHandshakeHelper::UniquePtr(
+        new wangle::UnencryptedAcceptorHandshakeHelper());
+  }
 }
 
 }} // apache::thrift

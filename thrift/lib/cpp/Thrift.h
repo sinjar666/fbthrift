@@ -155,8 +155,8 @@ template <typename T>
 class TEnumIterator : public std::map<T, char*>::iterator {
  public:
   TEnumIterator(int n,
-                T* enums,
-                const char** names) :
+                const T* enums,
+                const char* const* names) :
       ii_(0), n_(n), enums_(enums), names_(names) {
   }
 
@@ -164,7 +164,7 @@ class TEnumIterator : public std::map<T, char*>::iterator {
     return ++ii_;
   }
 
-  bool operator !=(const TEnumIterator<T>& end) {
+  bool operator !=(const TEnumIterator<T>& end) const {
     assert(end.n_ == -1);
     return (ii_ != n_);
   }
@@ -176,16 +176,16 @@ class TEnumIterator : public std::map<T, char*>::iterator {
  private:
   int ii_;
   const int n_;
-  T* enums_;
-  const char** names_;
+  const T* enums_;
+  const char* const* names_;
 };
 
 template <typename T>
 class TEnumInverseIterator : public std::map<T, char*>::iterator {
  public:
   TEnumInverseIterator(int n,
-                       T* enums,
-                       const char** names) :
+                       const T* enums,
+                       const char* const* names) :
       ii_(0), n_(n), enums_(enums), names_(names) {
   }
 
@@ -193,7 +193,7 @@ class TEnumInverseIterator : public std::map<T, char*>::iterator {
     return ++ii_;
   }
 
-  bool operator !=(const TEnumInverseIterator<T>& end) {
+  bool operator !=(const TEnumInverseIterator<T>& end) const {
     assert(end.n_ == -1);
     return (ii_ != n_);
   }
@@ -205,8 +205,8 @@ class TEnumInverseIterator : public std::map<T, char*>::iterator {
  private:
   int ii_;
   const int n_;
-  T* enums_;
-  const char** names_;
+  const T* enums_;
+  const char* const* names_;
 };
 
 class TOutput {
@@ -325,9 +325,27 @@ inline void reallyClear(ThriftContainer& container) {
   swap(container, emptyContainer);
 }
 
+/**
+ * Type-traits for defining type classes that differ by merge strategy.
+ *
+ * Merge strategies may be:
+ *  - default_merge for all non-specialized types; value of merge target
+ *    is overwritten.
+ *  - map_merge and set_merge for associative containers.
+ */
 template <typename T>
-inline void merge(const T& from, T& to) {
+struct MergeTrait {
+  using default_merge = void;
+};
+
+template <typename T>
+inline typename MergeTrait<T>::default_merge merge(const T& from, T& to) {
   to = from;
+}
+
+template <typename T>
+inline typename MergeTrait<T>::default_merge merge(T&& from, T& to) {
+  to = std::move(from);
 }
 
 template <typename T>
@@ -341,11 +359,6 @@ inline void merge(const std::unique_ptr<T>& from, std::unique_ptr<T>& to) {
   }
 }
 
-template <typename T>
-inline void merge(T&& from, T& to) {
-  to = std::move(from);
-}
-
 template <typename T, typename A>
 inline void merge(const std::vector<T, A>& from, std::vector<T, A>& to) {
   std::copy(from.begin(), from.end(), std::back_inserter(to));
@@ -356,30 +369,49 @@ inline void merge(std::vector<T, A>&& from, std::vector<T, A>& to) {
   std::move(from.begin(), from.end(), std::back_inserter(to));
 }
 
-template <typename K, typename C, typename A>
-inline void merge(const std::set<K, C, A>& from, std::set<K, C, A>& to) {
+template <typename... Ts>
+struct MergeTrait<std::unordered_set<Ts...>> {
+  using set_merge = void;
+};
+
+template <typename... Ts>
+struct MergeTrait<std::set<Ts...>> {
+  using set_merge = void;
+};
+
+template <typename T>
+inline typename MergeTrait<T>::set_merge merge(const T& from, T& to) {
   std::copy(from.begin(), from.end(), std::inserter(to, to.end()));
 }
 
-template <typename K, typename C, typename A>
-inline void merge(std::set<K, C, A>&& from, std::set<K, C, A>& to) {
+template <typename T>
+inline typename MergeTrait<T>::set_merge merge(T&& from, T& to) {
   std::move(from.begin(), from.end(), std::inserter(to, to.end()));
 }
 
-template <typename K, typename T, typename C, typename A>
-void merge(const std::map<K, T, C, A>& from, std::map<K, T, C, A>& to) {
+template <typename... Ts>
+struct MergeTrait<std::unordered_map<Ts...>> {
+  using map_merge = void;
+};
+
+template <typename... Ts>
+struct MergeTrait<std::map<Ts...>> {
+  using map_merge = void;
+};
+
+template <typename T>
+inline typename MergeTrait<T>::map_merge merge(const T& from, T& to) {
   for (auto& kv : from) {
     merge(kv.second, to[kv.first]);
   }
 }
 
-template <typename K, typename T, typename C, typename A>
-void merge(std::map<K, T, C, A>&& from, std::map<K, T, C, A>& to) {
+template <typename T>
+inline typename MergeTrait<T>::map_merge merge(T&& from, T& to) {
   for (auto&& kv : from) {
     merge(std::move(kv.second), to[kv.first]);
   }
 }
-
 }} // apache::thrift
 
 #endif // #ifndef THRIFT_THRIFT_H_

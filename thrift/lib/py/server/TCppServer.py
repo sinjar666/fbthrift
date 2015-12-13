@@ -19,6 +19,13 @@ class TCppConnectionContext(TConnectionContext):
     def getClientPrincipal(self):
         return self.context_data.getClientIdentity()
 
+    def getClientPrincipalUser(self):
+        principal = self.getClientPrincipal()
+        user, match, domain = principal.partition('@')
+        if match:
+            return user
+        return None
+
     def getPeerName(self):
         return self.context_data.getPeerAddress()
 
@@ -79,6 +86,9 @@ class _ProcessorAdapter(object):
             # Don't let exceptions escape back into C++
             traceback.print_exc()
 
+    def oneway_methods(self):
+        return self.processor.onewayMethods()
+
 class TCppServer(CppServerWrapper, TServer):
     def __init__(self, processor):
         CppServerWrapper.__init__(self)
@@ -97,6 +107,8 @@ class TCppServer(CppServerWrapper, TServer):
         if self._setup_done:
             return
         CppServerWrapper.setup(self)
+        # Task expire isn't supported in Python
+        CppServerWrapper.setTaskExpireTime(self, 0)
         if self.serverEventHandler is not None:
             self.serverEventHandler.preServe(self.getAddress())
         self._setup_done = True

@@ -22,8 +22,8 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
-#include "thrift/compiler/parse/t_program.h"
-#include "thrift/compiler/globals.h"
+#include <thrift/compiler/parse/t_program.h>
+#include <thrift/compiler/globals.h>
 
 // version.h
 #define THRIFT_VERSION "facebook"
@@ -92,8 +92,8 @@ class t_generator {
 
   virtual void generate_typedef  (t_typedef*  ttypedef)  = 0;
   virtual void generate_enum     (t_enum*     tenum)     = 0;
-  virtual void generate_const    (t_const*    tconst) {}
-  virtual void generate_forward_declaration(t_struct* tstruct) {};
+  virtual void generate_const    (t_const*    /*tconst*/) {}
+  virtual void generate_forward_declaration(t_struct* /*tstruct*/) {};
   virtual void generate_struct   (t_struct*   tstruct)   = 0;
   virtual void generate_service  (t_service*  tservice)  = 0;
   virtual void generate_xception (t_struct*   txception) {
@@ -466,6 +466,22 @@ class t_generator_factory {
   std::string short_name_;
   std::string long_name_;
   std::string documentation_;
+};
+
+class t_name_generator {
+ public:
+  t_name_generator() {}
+
+  std::string operator()() { return operator()("tmp_"); }
+
+  std::string operator()(const char* prefix) {
+    std::ostringstream out;
+    out << prefix << counter_++;
+    return out.str();
+  }
+
+ private:
+  int counter_{0};
 };
 
 template <typename generator>

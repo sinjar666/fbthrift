@@ -1326,11 +1326,13 @@ class MyServiceFastProcessor extends MyServiceFastSyncProcessor {}
 
 // HELPER FUNCTIONS AND STRUCTURES
 
-class MyServiceFast_ping_args implements IThriftStruct {
+class MyServiceFast_ping_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     );
   public static Map<string, int> $_TFIELDMAP = Map {
   };
+  const type TShape = shape(
+  );
   const int STRUCTURAL_ID = 957977401221134810;
 
   public function __construct(  ) {
@@ -1340,6 +1342,23 @@ class MyServiceFast_ping_args implements IThriftStruct {
     return 'MyServiceFast_ping_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -1380,7 +1399,7 @@ class MyServiceFast_ping_args implements IThriftStruct {
 
 }
 
-class MyServiceFast_ping_result implements IThriftStruct {
+class MyServiceFast_ping_result implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     );
   public static Map<string, int> $_TFIELDMAP = Map {
@@ -1434,11 +1453,13 @@ class MyServiceFast_ping_result implements IThriftStruct {
 
 }
 
-class MyServiceFast_getRandomData_args implements IThriftStruct {
+class MyServiceFast_getRandomData_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     );
   public static Map<string, int> $_TFIELDMAP = Map {
   };
+  const type TShape = shape(
+  );
   const int STRUCTURAL_ID = 957977401221134810;
 
   public function __construct(  ) {
@@ -1448,6 +1469,23 @@ class MyServiceFast_getRandomData_args implements IThriftStruct {
     return 'MyServiceFast_getRandomData_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -1488,7 +1526,7 @@ class MyServiceFast_getRandomData_args implements IThriftStruct {
 
 }
 
-class MyServiceFast_getRandomData_result implements IThriftStruct {
+class MyServiceFast_getRandomData_result implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     0 => array(
       'var' => 'success',
@@ -1549,9 +1587,9 @@ class MyServiceFast_getRandomData_result implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_getRandomData_result');
     if ($this->success !== null) {
-      $_val11 = $this->success;
+      $_val0 = $this->success;
       $xfer += $output->writeFieldBegin('success', TType::STRING, 0);
-      $xfer += $output->writeString($_val11);
+      $xfer += $output->writeString($_val0);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1561,7 +1599,7 @@ class MyServiceFast_getRandomData_result implements IThriftStruct {
 
 }
 
-class MyServiceFast_hasDataById_args implements IThriftStruct {
+class MyServiceFast_hasDataById_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     1 => array(
       'var' => 'id',
@@ -1571,6 +1609,9 @@ class MyServiceFast_hasDataById_args implements IThriftStruct {
   public static Map<string, int> $_TFIELDMAP = Map {
     'id' => 1,
   };
+  const type TShape = shape(
+    'id' => int,
+  );
   const int STRUCTURAL_ID = 3807211151619655933;
   public int $id;
 
@@ -1586,6 +1627,32 @@ class MyServiceFast_hasDataById_args implements IThriftStruct {
     return 'MyServiceFast_hasDataById_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    if (!array_key_exists('id', $shape_data)) {
+      $shape_data['id'] = 0;
+    }
+    if (!is_int($shape_data['id'])) {
+      return null;
+    }
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    $me->id = $shape['id'];
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+      'id' => $this->id,
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -1627,9 +1694,9 @@ class MyServiceFast_hasDataById_args implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_hasDataById_args');
     if ($this->id !== null) {
-      $_val12 = $this->id;
+      $_val0 = $this->id;
       $xfer += $output->writeFieldBegin('id', TType::I64, 1);
-      $xfer += $output->writeI64($_val12);
+      $xfer += $output->writeI64($_val0);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1639,7 +1706,7 @@ class MyServiceFast_hasDataById_args implements IThriftStruct {
 
 }
 
-class MyServiceFast_hasDataById_result implements IThriftStruct {
+class MyServiceFast_hasDataById_result implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     0 => array(
       'var' => 'success',
@@ -1700,9 +1767,9 @@ class MyServiceFast_hasDataById_result implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_hasDataById_result');
     if ($this->success !== null) {
-      $_val13 = $this->success;
+      $_val0 = $this->success;
       $xfer += $output->writeFieldBegin('success', TType::BOOL, 0);
-      $xfer += $output->writeBool($_val13);
+      $xfer += $output->writeBool($_val0);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1712,7 +1779,7 @@ class MyServiceFast_hasDataById_result implements IThriftStruct {
 
 }
 
-class MyServiceFast_getDataById_args implements IThriftStruct {
+class MyServiceFast_getDataById_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     1 => array(
       'var' => 'id',
@@ -1722,6 +1789,9 @@ class MyServiceFast_getDataById_args implements IThriftStruct {
   public static Map<string, int> $_TFIELDMAP = Map {
     'id' => 1,
   };
+  const type TShape = shape(
+    'id' => int,
+  );
   const int STRUCTURAL_ID = 3807211151619655933;
   public int $id;
 
@@ -1737,6 +1807,32 @@ class MyServiceFast_getDataById_args implements IThriftStruct {
     return 'MyServiceFast_getDataById_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    if (!array_key_exists('id', $shape_data)) {
+      $shape_data['id'] = 0;
+    }
+    if (!is_int($shape_data['id'])) {
+      return null;
+    }
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    $me->id = $shape['id'];
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+      'id' => $this->id,
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -1778,9 +1874,9 @@ class MyServiceFast_getDataById_args implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_getDataById_args');
     if ($this->id !== null) {
-      $_val14 = $this->id;
+      $_val0 = $this->id;
       $xfer += $output->writeFieldBegin('id', TType::I64, 1);
-      $xfer += $output->writeI64($_val14);
+      $xfer += $output->writeI64($_val0);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1790,7 +1886,7 @@ class MyServiceFast_getDataById_args implements IThriftStruct {
 
 }
 
-class MyServiceFast_getDataById_result implements IThriftStruct {
+class MyServiceFast_getDataById_result implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     0 => array(
       'var' => 'success',
@@ -1851,9 +1947,9 @@ class MyServiceFast_getDataById_result implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_getDataById_result');
     if ($this->success !== null) {
-      $_val15 = $this->success;
+      $_val0 = $this->success;
       $xfer += $output->writeFieldBegin('success', TType::STRING, 0);
-      $xfer += $output->writeString($_val15);
+      $xfer += $output->writeString($_val0);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1863,7 +1959,7 @@ class MyServiceFast_getDataById_result implements IThriftStruct {
 
 }
 
-class MyServiceFast_putDataById_args implements IThriftStruct {
+class MyServiceFast_putDataById_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     1 => array(
       'var' => 'id',
@@ -1878,6 +1974,10 @@ class MyServiceFast_putDataById_args implements IThriftStruct {
     'id' => 1,
     'data' => 2,
   };
+  const type TShape = shape(
+    'id' => int,
+    'data' => string,
+  );
   const int STRUCTURAL_ID = 1055685087985327657;
   public int $id;
   public string $data;
@@ -1899,6 +1999,41 @@ class MyServiceFast_putDataById_args implements IThriftStruct {
     return 'MyServiceFast_putDataById_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    if (!array_key_exists('id', $shape_data)) {
+      $shape_data['id'] = 0;
+    }
+    if (!is_int($shape_data['id'])) {
+      return null;
+    }
+
+    if (!array_key_exists('data', $shape_data)) {
+      $shape_data['data'] = '';
+    }
+    if (!is_string($shape_data['data'])) {
+      return null;
+    }
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    $me->id = $shape['id'];
+    $me->data = $shape['data'];
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+      'id' => $this->id,
+      'data' => $this->data,
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -1947,15 +2082,15 @@ class MyServiceFast_putDataById_args implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_putDataById_args');
     if ($this->id !== null) {
-      $_val16 = $this->id;
+      $_val0 = $this->id;
       $xfer += $output->writeFieldBegin('id', TType::I64, 1);
-      $xfer += $output->writeI64($_val16);
+      $xfer += $output->writeI64($_val0);
       $xfer += $output->writeFieldEnd();
     }
     if ($this->data !== null) {
-      $_val17 = $this->data;
+      $_val1 = $this->data;
       $xfer += $output->writeFieldBegin('data', TType::STRING, 2);
-      $xfer += $output->writeString($_val17);
+      $xfer += $output->writeString($_val1);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();
@@ -1965,7 +2100,7 @@ class MyServiceFast_putDataById_args implements IThriftStruct {
 
 }
 
-class MyServiceFast_putDataById_result implements IThriftStruct {
+class MyServiceFast_putDataById_result implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     );
   public static Map<string, int> $_TFIELDMAP = Map {
@@ -2019,7 +2154,7 @@ class MyServiceFast_putDataById_result implements IThriftStruct {
 
 }
 
-class MyServiceFast_lobDataById_args implements IThriftStruct {
+class MyServiceFast_lobDataById_args implements IThriftShapishStruct {
   public static array $_TSPEC = array(
     1 => array(
       'var' => 'id',
@@ -2034,6 +2169,10 @@ class MyServiceFast_lobDataById_args implements IThriftStruct {
     'id' => 1,
     'data' => 2,
   };
+  const type TShape = shape(
+    'id' => int,
+    'data' => string,
+  );
   const int STRUCTURAL_ID = 1055685087985327657;
   public int $id;
   public string $data;
@@ -2055,6 +2194,41 @@ class MyServiceFast_lobDataById_args implements IThriftStruct {
     return 'MyServiceFast_lobDataById_args';
   }
 
+  public static function __jsonArrayToShape(
+    array<arraykey, mixed> $json_data,
+  ): ?self::TShape {
+    $shape_data = $json_data;
+
+    if (!array_key_exists('id', $shape_data)) {
+      $shape_data['id'] = 0;
+    }
+    if (!is_int($shape_data['id'])) {
+      return null;
+    }
+
+    if (!array_key_exists('data', $shape_data)) {
+      $shape_data['data'] = '';
+    }
+    if (!is_string($shape_data['data'])) {
+      return null;
+    }
+
+    return /* HH_IGNORE_ERROR[4110] */ $shape_data;
+  }
+
+  public static function __fromShape(self::TShape $shape): this {
+    $me = /* HH_IGNORE_ERROR[4060] */ new static();
+    $me->id = $shape['id'];
+    $me->data = $shape['data'];
+    return $me;
+  }
+
+  public function __toShape(): self::TShape {
+    return shape(
+      'id' => $this->id,
+      'data' => $this->data,
+    );
+  }
   public function read(TProtocol $input): int {
     $xfer = 0;
     $fname = '';
@@ -2103,15 +2277,15 @@ class MyServiceFast_lobDataById_args implements IThriftStruct {
     $xfer = 0;
     $xfer += $output->writeStructBegin('MyServiceFast_lobDataById_args');
     if ($this->id !== null) {
-      $_val18 = $this->id;
+      $_val0 = $this->id;
       $xfer += $output->writeFieldBegin('id', TType::I64, 1);
-      $xfer += $output->writeI64($_val18);
+      $xfer += $output->writeI64($_val0);
       $xfer += $output->writeFieldEnd();
     }
     if ($this->data !== null) {
-      $_val19 = $this->data;
+      $_val1 = $this->data;
       $xfer += $output->writeFieldBegin('data', TType::STRING, 2);
-      $xfer += $output->writeString($_val19);
+      $xfer += $output->writeString($_val1);
       $xfer += $output->writeFieldEnd();
     }
     $xfer += $output->writeFieldStop();

@@ -30,8 +30,8 @@
 #include <folly/gen/String.h>
 #include <sys/stat.h>
 
-#include "thrift/compiler/platform.h"
-#include "thrift/compiler/generate/t_java_generator.h"
+#include <thrift/compiler/platform.h>
+#include <thrift/compiler/generate/t_java_generator.h>
 using namespace folly;
 using namespace std;
 
@@ -441,7 +441,7 @@ void t_android_lite_generator::close_generator() {
 
 /* Just like Java, we don't do anything for typedefs. We still override the
  * method so that a change to the Java compiler doesn't suprise us. */
-void t_android_lite_generator::generate_typedef(t_typedef* ttypedef) {
+void t_android_lite_generator::generate_typedef(t_typedef* /*ttypedef*/) {
   // Empty.
 }
 
@@ -511,7 +511,7 @@ void t_android_lite_generator::output_write(t_map* tmap, const string value,
 
 
 void t_android_lite_generator::output_write(t_struct* tstruct,
-    const string value, int depth, bool needs_cast, stringstream& stream) {
+    const string value, int /*depth*/, bool needs_cast, stringstream& stream) {
   if (needs_cast) {
     indent(stream) << "((" << type_name(tstruct) << ") " << value << ")";
   } else {
@@ -551,7 +551,7 @@ void t_android_lite_generator::output_write(t_set* tset, const string value,
 
 
 void t_android_lite_generator::output_write(t_enum* tenum, const string value,
-    int depth, bool needsCast, stringstream& stream) {
+    int /*depth*/, bool needsCast, stringstream& stream) {
   indent(stream) << "oprot.writeI32(";
   if (needsCast) {
     stream << "((" << type_name(tenum) << ") " << value << ")";
@@ -818,8 +818,8 @@ void t_android_lite_generator::print_const_value(ostream& out, string name,
 
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& vals = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& vals = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = vals.cbegin(); v_iter != vals.cend(); ++v_iter) {
       t_type* field_type = nullptr;
       for (f_iter = fields.cbegin(); f_iter != fields.end(); ++f_iter) {
@@ -857,11 +857,11 @@ void t_android_lite_generator::generate_enum(t_enum* tenum) {
   }
 }
 
-void t_android_lite_generator::generate_service(t_service* tservice) {
+void t_android_lite_generator::generate_service(t_service* /*tservice*/) {
   throw "Services are not yet supported for Thrift on Android.";
 }
 
-void t_android_lite_generator::generate_xception(t_struct* txception) {
+void t_android_lite_generator::generate_xception(t_struct* /*txception*/) {
   throw "Exceptions are not yet supported for Thrift on Android.";
 }
 

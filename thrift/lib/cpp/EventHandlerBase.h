@@ -25,6 +25,7 @@
 #include <thrift/lib/cpp/server/TConnectionContext.h>
 #include <thrift/lib/cpp/server/TServerObserver.h>
 #include <thrift/lib/cpp/transport/THeader.h>
+#include <folly/ExceptionWrapper.h>
 #include <folly/SocketAddress.h>
 
 namespace folly {
@@ -141,9 +142,14 @@ class TProcessorEventHandler {
    * Called if the handler throws an undeclared exception.
    */
   virtual void handlerError(void* /*ctx*/, const char* /*fn_name*/) {}
+  virtual void handlerErrorWrapped(void* ctx,
+                                   const char* fn_name,
+                                   const folly::exception_wrapper& /*ew*/) {
+    handlerError(ctx, fn_name);
+  }
 
   /**
-   * Called if the handler throws a declared exception
+   * Called if the handler throws an exception.
    *
    * Only called for Cpp2
    */
@@ -151,6 +157,35 @@ class TProcessorEventHandler {
                              const char* /*fn_name*/,
                              const std::string& /*ex*/,
                              const std::string& /*ex_what*/) {}
+  virtual void userExceptionWrapped(void* ctx,
+                                    const char* fn_name,
+                                    bool declared,
+                                    const folly::exception_wrapper& ew) {
+    CHECK(bool(ew));
+    std::string type;
+    std::string what;
+    auto typefb = ew.class_name();
+    if (ew.getCopied()) {
+      auto* ex = ew.getCopied();
+      type = typefb.toStdString();
+      what = declared ? ex->what() : type + ": " + ex->what();
+    } else if (typefb.empty()) {
+      try {
+        ew.throwException();
+      } catch (const std::exception& ex) {
+        type = folly::demangle(typeid(ex).name()).toStdString();
+        what = ex.what();
+      }
+    } else {
+      type = typefb.toStdString();
+      auto whatfb = ew.what();
+      folly::StringPiece whatsp(whatfb);
+      CHECK(whatsp.removePrefix(type)) << "weird format: '" << whatfb << "'";
+      CHECK(whatsp.removePrefix(": ")) << "weird format: '" << whatfb << "'";
+      what = whatsp.str();
+    }
+    userException(ctx, fn_name, type, what);
+  }
 
  protected:
   TProcessorEventHandler() {}
@@ -197,6 +232,7 @@ class ContextStack {
       : ctxs_()
       , handlers_(handlers)
       , method_(method) {
+    ctxs_.reserve(handlers->size());
     for (auto handler: *handlers) {
       ctxs_.push_back(handler->getServiceContext(serviceName,
                                                  method, connectionContext));
@@ -281,6 +317,14 @@ class ContextStack {
     }
   }
 
+  void handlerErrorWrapped(const folly::exception_wrapper& ew) {
+    if (handlers_) {
+      for (size_t i = 0; i < handlers_->size(); i++) {
+        (*handlers_)[i]->handlerErrorWrapped(ctxs_[i], method_, ew);
+      }
+    }
+  }
+
   void userException(const std::string& ex, const std::string& ex_what) {
     if (handlers_) {
       for (size_t i = 0; i < handlers_->size(); i++) {
@@ -288,6 +332,15 @@ class ContextStack {
       }
     }
   }
+
+  void userExceptionWrapped(bool declared, const folly::exception_wrapper& ew) {
+    if (handlers_) {
+      for (size_t i = 0; i < handlers_->size(); i++) {
+        (*handlers_)[i]->userExceptionWrapped(ctxs_[i], method_, declared, ew);
+      }
+    }
+  }
+
 
   void asyncComplete() {
     if (handlers_) {

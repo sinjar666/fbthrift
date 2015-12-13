@@ -18,6 +18,7 @@
 #define THRIFT_TRANSPORT_THTTPPARSER_H_ 1
 
 #include <folly/io/IOBuf.h>
+#include <folly/io/IOBufQueue.h>
 #include <thrift/lib/cpp/transport/TBufferTransports.h>
 
 namespace apache { namespace thrift { namespace util {
@@ -44,6 +45,7 @@ class THttpParser {
 
   void getReadBuffer(void** bufReturn, size_t* lenReturn);
   bool readDataAvailable(size_t len);
+  int getMinBytesRequired();
   void setDataBuffer(apache::thrift::transport::TMemoryBuffer* buffer) {
     dataBuf_ = buffer;
   }
@@ -73,7 +75,8 @@ class THttpParser {
   virtual std::unique_ptr<folly::IOBuf> constructHeader(
     std::unique_ptr<folly::IOBuf> buf,
     const std::map<std::string, std::string>& persistentWriteHeaders,
-    const std::map<std::string, std::string>& writeHeaders) = 0;
+    const std::map<std::string, std::string>& writeHeaders,
+    const std::map<std::string, std::string>* extraWriteHeaders) = 0;
 
  protected:
   HttpParseResult parseStart();
@@ -135,13 +138,18 @@ class THttpClientParser : public THttpParser {
   std::unique_ptr<folly::IOBuf> constructHeader(
       std::unique_ptr<folly::IOBuf> buf,
       const std::map<std::string, std::string>& persistentWriteHeaders,
-      const std::map<std::string, std::string>& writeHeaders) override;
+      const std::map<std::string, std::string>& writeHeaders,
+      const std::map<std::string, std::string>* extraWriteHeaders) override;
 
  protected:
   void parseHeaderLine(const char* header) override;
   bool parseStatusLine(const char* status) override;
 
  private:
+  static void appendHeadersToQueue(
+      folly::IOBufQueue& queue,
+      const std::map<std::string, std::string>& headersToAppend);
+
   bool connectionClosedByServer_;
   std::string host_;
   std::string path_;

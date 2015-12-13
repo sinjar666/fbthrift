@@ -42,7 +42,7 @@ IOBufQueue helper<ProtocolReader, ProtocolWriter>::write_exn(
   bufSize += prot->serializedMessageSize(method);
   prot->setOutput(&queue, bufSize);
   if (ctx) {
-    ctx->handlerError();
+    ctx->handlerErrorWrapped(exception_wrapper(x));
   }
   prot->writeMessageBegin(method, T_EXCEPTION, protoSeqId);
   x.write(prot);
@@ -56,7 +56,7 @@ void helper<ProtocolReader, ProtocolWriter>::process_exn(
     const string& msg,
     unique_ptr<ResponseChannel::Request> req,
     Cpp2RequestContext* ctx,
-    TEventBase* eb,
+    EventBase* eb,
     int32_t protoSeqId) {
   ProtocolWriter oprot;
   if (req) {
@@ -161,9 +161,6 @@ bool is_oneway_method(
     const IOBuf* buf,
     const THeader* header,
     const unordered_set<string>& oneways) {
-  string fname;
-  MessageType mtype;
-  int32_t protoSeqId = 0;
   auto protType = static_cast<PROTOCOL_TYPES>(header->getProtocolId());
   switch (protType) {
     case T_BINARY_PROTOCOL:

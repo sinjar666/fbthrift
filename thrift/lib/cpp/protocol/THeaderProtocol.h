@@ -123,6 +123,16 @@ class THeaderProtocol
     trans_->setHeader(key, value);
   }
 
+  void setHeaders(const StringToStringMap& headers) {
+    for (const auto& it : headers) {
+      setHeader(it.first, it.second);
+    }
+  }
+
+  bool isWriteHeadersEmpty() {
+    return trans_->isWriteHeadersEmpty();
+  }
+
   void setPersistentHeader(const std::string& key, const std::string& value) {
     trans_->setPersistentHeader(key, value);
   }
@@ -133,10 +143,6 @@ class THeaderProtocol
 
   void clearPersistentHeaders() {
     trans_->clearPersistentHeaders();
-  }
-
-  StringToStringMap& getWriteHeaders() {
-    return trans_->getWriteHeaders();
   }
 
   StringToStringMap& getPersistentWriteHeaders() {
@@ -157,11 +163,6 @@ class THeaderProtocol
   }
   void setIdentity(const std::string& identity) {
     trans_->setIdentity(identity);
-  }
-
-  void setHmac(transport::THeaderTransport::MacCallback macCb,
-               transport::THeaderTransport::VerifyMacCallback verifyCb) {
-    trans_->setHmac(macCb, verifyCb);
   }
 
   /**

@@ -28,8 +28,8 @@
 #include <sys/types.h>
 #include <sstream>
 
-#include "thrift/compiler/generate/t_oop_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_oop_generator.h>
+#include <thrift/compiler/platform.h>
 using namespace std;
 
 
@@ -41,8 +41,8 @@ class t_rb_generator : public t_oop_generator {
  public:
   t_rb_generator(
       t_program* program,
-      const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::map<std::string, std::string>& /*parsed_options*/,
+      const std::string& /*option_string*/)
     : t_oop_generator(program)
   {
     out_dir_base_ = "gen-rb";
@@ -278,7 +278,7 @@ void t_rb_generator::close_generator() {
  *
  * @param ttypedef The type definition
  */
-void t_rb_generator::generate_typedef(t_typedef* ttypedef) {}
+void t_rb_generator::generate_typedef(t_typedef* /*ttypedef*/) {}
 
 /**
  * Generates code for an enumerated type. Done using a class to scope
@@ -395,8 +395,8 @@ string t_rb_generator::render_const_value(t_type* type, t_const_value* value) {
     indent_up();
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       t_type* field_type = nullptr;
       for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
@@ -420,8 +420,8 @@ string t_rb_generator::render_const_value(t_type* type, t_const_value* value) {
     t_type* vtype = ((t_map*)type)->get_val_type();
     out << "{" << endl;
     indent_up();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       out << indent();
       out << render_const_value(ktype, v_iter->first);
@@ -894,7 +894,7 @@ void t_rb_generator::generate_service_server(t_service* tservice) {
  *
  * @param tfunction The function to write a dispatcher for
  */
-void t_rb_generator::generate_process_function(t_service* tservice,
+void t_rb_generator::generate_process_function(t_service* /*tservice*/,
                                                t_function* tfunction) {
   // Open function
   indent(f_service_) <<

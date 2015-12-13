@@ -27,7 +27,7 @@
 #include <sys/types.h>
 #include <sstream>
 
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/platform.h>
 #include "t_oop_generator.h"
 using namespace std;
 
@@ -383,8 +383,8 @@ string t_st_generator::render_const_value(t_type* type, t_const_value* value) {
 
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
 
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       t_type* field_type = nullptr;
@@ -409,8 +409,8 @@ string t_st_generator::render_const_value(t_type* type, t_const_value* value) {
     out << "(Dictionary new" << endl;
     indent_up();
     indent_up();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       out << indent() << indent();
       out << "at: " << render_const_value(ktype, v_iter->first);
@@ -1044,6 +1044,8 @@ string t_st_generator::type_to_enum(t_type* type) {
       return "TType i32";
     case t_base_type::TYPE_I64:
       return "TType i64";
+    case t_base_type::TYPE_FLOAT:
+      return "TType float";
     case t_base_type::TYPE_DOUBLE:
       return "TType double";
     }

@@ -17,17 +17,18 @@
 #ifndef CPP2_WORKER_H_
 #define CPP2_WORKER_H_ 1
 
-#include <thrift/lib/cpp/async/TAsyncServerSocket.h>
+#include <folly/io/async/AsyncServerSocket.h>
 #include <thrift/lib/cpp/async/TAsyncSSLSocket.h>
-#include <thrift/lib/cpp/async/HHWheelTimer.h>
+#include <folly/io/async/HHWheelTimer.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
-#include <thrift/lib/cpp/async/TEventBase.h>
-#include <thrift/lib/cpp/async/TEventHandler.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/EventHandler.h>
 #include <thrift/lib/cpp/server/TServer.h>
 #include <unordered_set>
 
 #include <wangle/acceptor/ConnectionManager.h>
 #include <wangle/acceptor/Acceptor.h>
+#include <wangle/acceptor/PeekingAcceptorHandshakeHelper.h>
 
 namespace apache { namespace thrift {
 
@@ -60,24 +61,28 @@ class Cpp2Worker
              folly::EventBase* eventBase = nullptr) :
     Acceptor(server->getServerSocketConfig()),
     server_(server),
-    eventBase_(eventBase),
     activeRequests_(0),
     pendingCount_(0),
     pendingTime_(std::chrono::steady_clock::now()) {
     auto observer =
-      std::dynamic_pointer_cast<apache::thrift::async::EventBaseObserver>(
+      std::dynamic_pointer_cast<folly::EventBaseObserver>(
       server_->getObserver());
+    if (serverChannel) {
+      eventBase = serverChannel->getEventBase();
+    } else if (!eventBase) {
+      eventBase = folly::EventBaseManager::get()->getEventBase();
+    }
+    Acceptor::init(nullptr, eventBase);
+
     if (serverChannel) {
       // duplex
       useExistingChannel(serverChannel);
-    } else if (!eventBase_) {
-      eventBase_ = folly::EventBaseManager::get()->getEventBase();
-    }
-    if (observer) {
-      eventBase_->setObserver(observer);
     }
 
-    Acceptor::init(nullptr, eventBase_);
+    if (observer) {
+      eventBase->setObserver(observer);
+    }
+
   }
 
   /**
@@ -100,18 +105,42 @@ class Cpp2Worker
    */
   int getPendingCount() const;
 
- private:
-  /// The mother ship.
-  ThriftServer* server_;
+ protected:
+  enum { kPeekCount = 9 };
+  using PeekingHelper = wangle::PeekingAcceptorHandshakeHelper<kPeekCount>;
 
-  /// An instance's TEventBase for I/O.
-  apache::thrift::async::TEventBase* eventBase_;
+  class PeekingCallback : public PeekingHelper::PeekCallback {
+   public:
+    virtual wangle::AcceptorHandshakeHelper::UniquePtr getHelper(
+        std::array<uint8_t, kPeekCount> bytes,
+        wangle::Acceptor* acceptor,
+        const folly::SocketAddress& clientAddr,
+        std::chrono::steady_clock::time_point acceptTime,
+        wangle::TransportInfo& tinfo) override;
+  };
 
-  void onNewConnection(folly::AsyncSocket::UniquePtr,
+  /**
+   * The socket peeker to use to determine the type of incoming byte stream.
+   */
+  virtual PeekingHelper::PeekCallback* getPeekingHandshakeCallback() {
+    return &peekingCallback_;
+  }
+
+  void onNewConnection(folly::AsyncTransportWrapper::UniquePtr,
                        const folly::SocketAddress*,
                        const std::string&,
                        SecureTransportType,
                        const wangle::TransportInfo&) override;
+
+  static bool looksLikeTLS(std::array<uint8_t, kPeekCount>& bytes);
+
+  SSLPolicy getSSLPolicy() {
+    return server_->getSSLPolicy();
+  }
+
+ private:
+  /// The mother ship.
+  ThriftServer* server_;
 
   folly::AsyncSocket::UniquePtr makeNewAsyncSocket(folly::EventBase* base,
                                                    int fd) override {
@@ -141,6 +170,52 @@ class Cpp2Worker
 
   int pendingCount_;
   std::chrono::steady_clock::time_point pendingTime_;
+
+  PeekingCallback peekingCallback_;
+
+  void startHandshakeManager(
+      folly::AsyncSSLSocket::UniquePtr sslSock,
+      wangle::Acceptor* acceptor,
+      const folly::SocketAddress& clientAddr,
+      std::chrono::steady_clock::time_point acceptTime,
+      wangle::TransportInfo& tinfo) noexcept override {
+
+    switch (getSSLPolicy()) {
+    default:
+    case SSLPolicy::DISABLED:
+      // No TLS, complete "handshake" and stay in STATE_UNENCRYPTED
+      sslConnectionReady(
+          std::move(sslSock),
+          clientAddr,
+          "",
+          SecureTransportType::NONE,
+          tinfo);
+      break;
+
+    case SSLPolicy::PERMITTED: {
+      // Peek and fall back to insecure if non-TLS bytes discovered
+      auto manager = new wangle::PeekingAcceptorHandshakeManager<kPeekCount>(
+          this,
+          clientAddr,
+          acceptTime,
+          tinfo,
+          getPeekingHandshakeCallback()
+        );
+      manager->start(std::move(sslSock));
+      break;
+    }
+
+    case SSLPolicy::REQUIRED:
+      // Delegate to Acceptor, which always does TLS
+      wangle::Acceptor::startHandshakeManager(
+          std::move(sslSock),
+          acceptor,
+          clientAddr,
+          acceptTime,
+          tinfo);
+      break;
+    }
+  }
 
   friend class Cpp2Connection;
   friend class ThriftServer;

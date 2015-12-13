@@ -22,8 +22,8 @@
 #include <thrift/lib/cpp2/async/HeaderClientChannel.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
-#include "thrift/test/gen-cpp/ExceptionThrowingService.h"
-#include "thrift/test/gen-cpp2/ExceptionThrowingService.h"
+#include <thrift/test/gen-cpp/ExceptionThrowingService.h>
+#include <thrift/test/gen-cpp2/ExceptionThrowingService.h>
 
 using namespace apache::thrift;
 using namespace apache::thrift::async;
@@ -123,7 +123,7 @@ TEST(ExceptionThrowingTest, Thrift1Client) {
   client.throwException(
     [&exceptionThrown] (ExceptionThrowingServiceCobClient* client) {
       auto ew = client->recv_wrapped_throwException();
-      if (ew && ew.with_exception<SimpleException>(
+      if (ew && ew.with_exception(
         [] (const SimpleException& e) {
           EXPECT_EQ(e.message, "Hello World");
       })) {
@@ -142,7 +142,7 @@ TEST(ExceptionThrowingTest, Thrift2Client) {
   auto* serverAddr = serverThread->getAddress();
   std::shared_ptr<TAsyncSocket> socket(TAsyncSocket::newSocket(
       &eb, *serverAddr));
-  std::unique_ptr<HeaderClientChannel, TDelayedDestruction::Destructor> channel(
+  std::unique_ptr<HeaderClientChannel, folly::DelayedDestruction::Destructor> channel(
       new HeaderClientChannel(socket));
   ExceptionThrowingServiceAsyncClient client(std::move(channel));
 
@@ -206,7 +206,7 @@ TEST(ExceptionThrowingTest, Thrift2Client) {
       EXPECT_FALSE(state.exceptionWrapper());
       auto ew =
         ExceptionThrowingServiceAsyncClient::recv_wrapped_throwException(state);
-      if (ew && ew.with_exception<SimpleException>(
+      if (ew && ew.with_exception(
         [] (const SimpleException& e) {
           EXPECT_EQ(e.message, "Hello World");
       })) {

@@ -17,14 +17,14 @@
 #include <string>
 #include <unordered_map>
 #include <gtest/gtest.h>
-#include <thrift/lib/cpp/async/TEventBase.h>
+#include <folly/io/async/EventBase.h>
 #include <thrift/lib/cpp/async/TAsyncSocket.h>
 #include <thrift/lib/cpp/util/ScopedServerThread.h>
 #include <thrift/lib/cpp2/protocol/BinaryProtocol.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/async/HeaderClientChannel.h>
 
-#include "thrift/test/gen-cpp2/CustomStruct.h"
+#include <thrift/test/gen-cpp2/CustomStruct.h>
 
 using namespace apache::thrift;
 using namespace apache::thrift::async;
@@ -124,13 +124,13 @@ TEST(CustomStructs, RoundTripEmptyContainer) {
 
 TEST(CustomStructs, SerializeOverHandler) {
   ScopedServerThread sst(getServer());
-  TEventBase base;
+  folly::EventBase base;
   std::shared_ptr<TAsyncSocket> socket(
     TAsyncSocket::newSocket(&base, *sst.getAddress()));
 
   CustomStructAsyncClient client(
     std::unique_ptr<HeaderClientChannel,
-                    apache::thrift::async::TDelayedDestruction::Destructor>(
+                    folly::DelayedDestruction::Destructor>(
                       new HeaderClientChannel(socket)));
 
   {

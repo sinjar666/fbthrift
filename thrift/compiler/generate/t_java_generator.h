@@ -30,8 +30,8 @@
 #include <sys/stat.h>
 #include <stdexcept>
 
-#include "thrift/compiler/platform.h"
-#include "thrift/compiler/generate/t_oop_generator.h"
+#include <thrift/compiler/platform.h>
+#include <thrift/compiler/generate/t_oop_generator.h>
 
 /**
  * Java code generator.
@@ -42,7 +42,7 @@ class t_java_generator : public t_oop_generator {
   t_java_generator(
       t_program* program,
       const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::string& /*option_string*/)
     : t_oop_generator(program)
   {
     std::map<std::string, std::string>::const_iterator iter;

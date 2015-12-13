@@ -26,8 +26,8 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sstream>
-#include "thrift/compiler/generate/t_oop_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_oop_generator.h>
+#include <thrift/compiler/platform.h>
 
 using std::map;
 using std::ofstream;
@@ -68,6 +68,16 @@ class t_cocoa_generator : public t_oop_generator {
 
     iter = parsed_options.find("nullability");
     nullability_ = (iter != parsed_options.end());
+
+    iter = parsed_options.find("import_path");
+    if (iter == parsed_options.end()) {
+      import_path_ = "";
+    } else {
+      import_path_ = iter->second;
+      if (import_path_.at(import_path_.length() - 1) != '/') {
+        import_path_ += '/';
+      }
+    }
 
     out_dir_base_ = "gen-cocoa";
   }
@@ -240,6 +250,7 @@ class t_cocoa_generator : public t_oop_generator {
   bool log_unexpected_;
   bool validate_required_;
   bool nullability_;
+  string import_path_;
 };
 
 
@@ -315,17 +326,19 @@ std::string t_cocoa_generator::custom_thrift_marker()
  * @return List of imports necessary for thrift runtime
  */
 string t_cocoa_generator::cocoa_thrift_imports() {
-  string result = string() +
-    "#import \"TProtocol.h\"\n" +
-    "#import \"TApplicationException.h\"\n" +
-    "#import \"TProtocolException.h\"\n" +
-    "#import \"TProtocolUtil.h\"\n" +
-    "#import \"TProcessor.h\"\n" +
-    "#import \"TObjective-C.h\"\n" +
-    "#import \"TBase.h\"\n";
+  string systemImports[] = { "TProtocol", "TApplicationException",
+    "TProtocolException", "TProtocolUtil", "TProcessor", "TObjective-C",
+    "TBase", kStructInheritanceRootObjectName,
+  };
 
-  result += "#import \"" + kStructInheritanceRootObjectName + ".h\"";
-  result += "\n";
+  string result = "";
+  for (int i = 0; i < sizeof(systemImports) / sizeof(systemImports[0]); i++) {
+    if (import_path_ == "") {
+      result += "#import \"" + systemImports[i] + ".h\"\n";
+    } else {
+      result += "#import <" + import_path_  + systemImports[i] + ".h>\n";
+    }
+  }
 
   // Include other Thrift includes
   const vector<t_program*>& includes = program_->get_includes();
@@ -1264,8 +1277,9 @@ void t_cocoa_generator::generate_cocoa_struct_field_accessor_implementations(ofs
  *
  * @param tstruct The struct definition
  */
-void t_cocoa_generator::generate_cocoa_struct_description(ofstream& out,
-                                                          t_struct* tstruct) {
+void t_cocoa_generator::generate_cocoa_struct_description(
+    ofstream& out,
+    t_struct* /*tstruct*/) {
   out << indent() << "- (NSString *) description {" << endl;
   indent_up();
   indent(out) << "return [[self toDict] description];" << endl;
@@ -2585,8 +2599,8 @@ void t_cocoa_generator::print_const_value(std::ofstream& out, std::string name, 
   } else if (type->is_struct() || type->is_xception()) {
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     if (defval)
       out << type_name(type) << " ";
     if (defval || is_property)
@@ -2611,8 +2625,8 @@ void t_cocoa_generator::print_const_value(std::ofstream& out, std::string name, 
   } else if (type->is_map()) {
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     if (defval)
       out << "NSMutableDictionary *";
     if (defval || is_property)
@@ -3017,8 +3031,9 @@ string t_cocoa_generator::call_field_setter(t_field* tfield, string fieldName) {
 
 
 THRIFT_REGISTER_GENERATOR(cocoa, "Cocoa",
+"    import_path=XYZ: Override thrift package import path\n"
 "    log_unexpected:  Log every time an unexpected field ID or type is encountered.\n"
-"    nullability:  Use annotations to ensure required fields are present.\n"
+"    nullability:     Use annotations to ensure required fields are present.\n"
 "    validate_required:\n"
 "                     Throws exception if any required field is not set.\n"
 )

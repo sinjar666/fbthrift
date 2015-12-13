@@ -24,6 +24,7 @@
 #include "common/time/TimeConstants.h"
 #include <thrift/lib/cpp/concurrency/Util.h>
 #include <thread>
+#include <condition_variable>
 #include <vector>
 
 using namespace std;
@@ -36,7 +37,7 @@ const int kTimeoutMs = kTimeoutUsec / kUsecPerMs;
 const int kMaxReaders = 10;
 const int kMicroSecInMilliSec = 1000;
 // user operation time on the lock in milliseconds
-const int kOpTimeInMs = 100;
+const int kOpTimeInMs = 200;
 
 TEST(RWMutexTest, Max_Readers ) {
   ReadWriteMutex l;
@@ -232,17 +233,29 @@ TEST(NoStarveRWMutexTest, Writer_Wait_Readers ) {
   EXPECT_TRUE(l.timedWrite(kTimeoutMs));
   l.release();
 
+  std::condition_variable cv;
+  std::mutex cv_m;
+  int readers = 0;
+
   // Testing timeout
   vector<std::thread> threads_;
   for (int i = 0; i < kMaxReaders; ++i) {
-    threads_.push_back(std::thread([this, &l] {
+    threads_.push_back(std::thread([&, this] {
       EXPECT_TRUE(l.timedRead(kTimeoutMs));
+      {
+        std::lock_guard<std::mutex> lk(cv_m);
+        readers++;
+        cv.notify_one();
+      }
       usleep(kOpTimeInMs * kMicroSecInMilliSec);
       l.release();
     }));
   }
-  // make sure reader lock the lock first
-  usleep(1000);
+
+  {
+    std::unique_lock<std::mutex> lk(cv_m);
+    cv.wait(lk, [&] {return readers == kMaxReaders;});
+  }
 
   // wait shorter than the operation time will timeout
   std::thread thread1 = std::thread([this, &l] {
@@ -281,20 +294,30 @@ TEST(NoStarveRWMutexTest, Readers_Wait_Writer) {
     l.release();
   }
 
+  std::condition_variable cv;
+  std::mutex cv_m;
+  bool writer = false;
+
   // Testing Timeout
-  std::thread wrThread = std::thread([&l] {
+  std::thread wrThread = std::thread([&] {
       EXPECT_TRUE(l.timedWrite(kTimeoutMs));
+      {
+        std::lock_guard<std::mutex> lk(cv_m);
+        writer = true;
+        cv.notify_all();
+      }
       usleep(kOpTimeInMs * kMicroSecInMilliSec);
       l.release();
     });
 
-  // make sure wrThread lock the lock first
-  usleep(1000);
-
   vector<std::thread> threads_;
   for (int i = 0; i < kMaxReaders; ++i) {
     // wait shorter than the operation time will timeout
-    threads_.push_back(std::thread([&l] {
+    threads_.push_back(std::thread([&] {
+      {
+        std::unique_lock<std::mutex> lk(cv_m);
+        cv.wait(lk, [&] { return writer; });
+      }
       EXPECT_FALSE(l.timedRead(0.5 * kOpTimeInMs));
     }));
 

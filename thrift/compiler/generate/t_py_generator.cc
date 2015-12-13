@@ -26,8 +26,8 @@
 #include <sstream>
 #include <algorithm>
 #include <set>
-#include "thrift/compiler/generate/t_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_generator.h>
+#include <thrift/compiler/platform.h>
 using namespace std;
 
 // All other Python keywords (as of 2.7) are reserved by the Thrift
@@ -45,7 +45,7 @@ class t_py_generator : public t_generator {
   t_py_generator(
       t_program* program,
       const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::string& /*option_string*/)
     : t_generator(program)
   {
     std::map<std::string, std::string>::const_iterator iter;
@@ -240,10 +240,6 @@ class t_py_generator : public t_generator {
   void generate_json_reader          (std::ofstream& out,
                                       t_struct* tstruct);
 
-  void generate_fastbinary_read       (std::ofstream& out,
-                                      t_struct* tstruct);
-  void generate_fastbinary_write      (std::ofstream& out,
-                                      t_struct* tstruct);
   void generate_fastproto_read       (std::ofstream& out,
                                       t_struct* tstruct);
   void generate_fastproto_write      (std::ofstream& out,
@@ -258,7 +254,7 @@ class t_py_generator : public t_generator {
   std::string py_imports();
   std::string rename_reserved_keywords(const std::string& value);
   std::string render_includes();
-  std::string render_fastbinary_and_fastproto_includes();
+  std::string render_fastproto_includes();
   std::string declare_argument(std::string structname, t_field* tfield);
   std::string render_field_default_value(t_field* tfield);
   std::string type_name(t_type* ttype);
@@ -758,7 +754,7 @@ void t_py_generator::init_generator() {
     py_autogen_comment() << endl <<
     py_imports() << endl <<
     render_includes() << endl <<
-    render_fastbinary_and_fastproto_includes() <<
+    render_fastproto_includes() <<
     "all_structs = []" << endl <<
     "UTF8STRINGS = bool(" << gen_utf8strings_ << ") or " <<
     "sys.version_info.major >= 3" << endl << endl;
@@ -796,13 +792,9 @@ string t_py_generator::render_includes() {
 }
 
 /**
- * Renders all the imports necessary to use the accelerated TBinaryProtocol
- * or fastproto.
+ * Renders all the imports necessary to use fastproto.
  */
-string t_py_generator::render_fastbinary_and_fastproto_includes() {
-  // In the try block below, we disable fastbinary if either
-  // 'version' is not defined (causing an exception), or if it is defined
-  // and has an old value.  Warn if it is an old value.
+string t_py_generator::render_fastproto_includes() {
   return
     "import pprint\n"
     "import warnings\n"
@@ -811,13 +803,6 @@ string t_py_generator::render_fastbinary_and_fastproto_includes() {
     "from thrift.protocol import TBinaryProtocol\n"
     "from thrift.protocol import TCompactProtocol\n"
     "from thrift.protocol import THeaderProtocol\n"
-    "try:\n"
-    "  from thrift.protocol import fastbinary\n"
-    "  if fastbinary.version < 2:\n"
-    "    fastbinary = None\n"
-    "    warnings.warn(\"Disabling fastbinary, need at least version 2\")\n"
-    "except:\n"
-    "  fastbinary = None\n"
     "try:\n"
     "  from thrift.protocol import fastproto\n"
     "except:\n"
@@ -907,7 +892,7 @@ void t_py_generator::close_generator() {
  *
  * @param ttypedef The type definition
  */
-void t_py_generator::generate_typedef(t_typedef* ttypedef) {}
+void t_py_generator::generate_typedef(t_typedef* /*ttypedef*/) {}
 
 /**
  * Generates code for an enumerated type. Done using a class to scope
@@ -1020,8 +1005,8 @@ string t_py_generator::render_const_value(t_type* type, t_const_value* value) {
     indent_up();
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       t_type* field_type = nullptr;
       for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
@@ -1046,8 +1031,8 @@ string t_py_generator::render_const_value(t_type* type, t_const_value* value) {
     t_type* vtype = ((t_map*)type)->get_val_type();
     out << "{" << endl;
     indent_up();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       out << indent();
       out << render_const_value(ktype, v_iter->first);
@@ -1137,7 +1122,6 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
 
   out << endl;
 
-  // TODO: make union work with fastbinary
   indent(out) << "thrift_spec = None" << endl;
   if (members.size() != 0) {
     indent(out) << "__init__ = None" << endl << endl;
@@ -1205,8 +1189,6 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
   indent(out) << "self.field = 0" << endl;
   indent(out) << "self.value = None" << endl;
 
-  // fastbinary doesn't support union (we could add it, but it should
-  // be deprecated by fastproto)
   generate_fastproto_read(out, tstruct);
 
   indent(out) << "iprot.readStructBegin()" << endl;
@@ -1251,7 +1233,6 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
   indent(out) << "def write(self, oprot):" << endl;
   indent_up();
 
-  // fastbinary doesn't support union
   generate_fastproto_write(out, tstruct);
 
   indent(out) << "oprot.writeUnionBegin('" << tstruct->get_name()
@@ -1347,7 +1328,7 @@ void t_py_generator::generate_py_union(ofstream& out, t_struct* tstruct) {
 
 void t_py_generator::generate_py_thrift_spec(ofstream& out,
                                              t_struct* tstruct,
-                                             bool is_exception) {
+                                             bool /*is_exception*/) {
 
   const vector<t_field*>& members = tstruct->get_members();
   const vector<t_field*>& sorted_members = tstruct->get_sorted_members();
@@ -1499,7 +1480,7 @@ void t_py_generator::generate_py_annotations(std::ofstream& out,
 void t_py_generator::generate_py_struct_definition(ofstream& out,
                                                    t_struct* tstruct,
                                                    bool is_exception,
-                                                   bool is_result) {
+                                                   bool /*is_result*/) {
 
   const vector<t_field*>& members = tstruct->get_members();
   const vector<t_field*>& sorted_members = tstruct->get_sorted_members();
@@ -1520,8 +1501,7 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
   out << endl;
 
   /*
-     Here we generate the structure specification for the fastbinary/fastproto
-     codec.
+     Here we generate the structure specification for the fastproto codec.
      These specifications have the following structure:
      thrift_spec -> tuple of item_spec
      item_spec -> None | (tag, type_enum, name, spec_args, default)
@@ -1588,8 +1568,8 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
       indent() << "def __repr__(self):" << endl <<
       indent() << "  L = []" << endl <<
       indent() << "  for key, value in six.iteritems(self.__dict__):" << endl <<
-      indent() << "    padding = ' ' * (len(key) + 1)" << endl <<
-      indent() << "    value = pprint.pformat(value)" << endl <<
+      indent() << "    padding = ' ' * 4" << endl <<
+      indent() << "    value = pprint.pformat(value, indent=0)" << endl <<
       indent() << "    value = padding.join(value.splitlines(True))" << endl <<
       indent() << "    L.append('    %s=%s' % (key, value))" << endl;
 
@@ -1647,7 +1627,7 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
       indent() << "def __repr__(self):" << endl <<
       indent() << "  L = []" << endl <<
       indent() << "  for key in self.__slots__:" << endl <<
-      indent() << "    padding = ' ' * (len(key) + 1)" << endl <<
+      indent() << "    padding = ' ' * 4" << endl <<
       indent() << "    value = pprint.pformat(getattr(self, key))" << endl <<
       indent() << "    value = padding.join(value.splitlines(True))" << endl <<
       indent() << "    L.append('    %s=%s' % (key, value))" << endl <<
@@ -1757,47 +1737,6 @@ void t_py_generator::generate_fastproto_read(ofstream& out,
   indent_down();
 }
 
-void t_py_generator::generate_fastbinary_read(ofstream& out,
-                                              t_struct* tstruct) {
-  indent(out) <<
-    "if (isinstance(iprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
-    "or (isinstance(iprot, THeaderProtocol.THeaderProtocol) and "
-    "iprot.get_protocol_id() == "
-    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
-    "and isinstance(iprot.trans, TTransport.CReadableTransport) "
-    "and self.thrift_spec is not None "
-    "and fastbinary is not None:" << endl;
-  indent_up();
-
-  indent(out) <<
-    "fastbinary.decode_binary(self, iprot.trans, " <<
-    "[self.__class__, self.thrift_spec, False], " <<
-    "utf8strings=UTF8STRINGS)" << endl;
-  indent(out) <<
-    "return" << endl;
-  indent_down();
-}
-
-void t_py_generator::generate_fastbinary_write(ofstream& out,
-                                               t_struct* tstruct) {
-  indent(out) <<
-    "if (isinstance(oprot, TBinaryProtocol.TBinaryProtocolAccelerated) "
-    "or (isinstance(oprot, THeaderProtocol.THeaderProtocol) and "
-    "oprot.get_protocol_id() == "
-    "THeaderProtocol.THeaderProtocol.T_BINARY_PROTOCOL)) "
-    "and self.thrift_spec is not None "
-    "and fastbinary is not None:" << endl;
-  indent_up();
-
-  indent(out) <<
-    "oprot.trans.write(fastbinary.encode_binary(self, " <<
-    "[self.__class__, self.thrift_spec, False], "
-    "utf8strings=UTF8STRINGS))" << endl;
-  indent(out) <<
-    "return" << endl;
-  indent_down();
-}
-
 /**
  * Generates the read method for a struct
  */
@@ -1810,7 +1749,6 @@ void t_py_generator::generate_py_struct_reader(ofstream& out,
     "def read(self, iprot):" << endl;
   indent_up();
 
-  generate_fastbinary_read(out, tstruct);
   generate_fastproto_read(out, tstruct);
 
   indent(out) <<
@@ -1906,7 +1844,6 @@ void t_py_generator::generate_py_struct_writer(ofstream& out,
     "def write(self, oprot):" << endl;
   indent_up();
 
-  generate_fastbinary_write(out, tstruct);
   generate_fastproto_write(out, tstruct);
 
   indent(out) <<
@@ -1979,7 +1916,7 @@ void t_py_generator::generate_service(t_service* tservice) {
   f_service_ <<
     "from .ttypes import *" << endl <<
     "from thrift.Thrift import TProcessor" << endl <<
-    render_fastbinary_and_fastproto_includes() << endl <<
+    render_fastproto_includes() << endl <<
     "all_structs = []" << endl <<
     "UTF8STRINGS = bool(" << gen_utf8strings_ << ") or " <<
     "sys.version_info.major >= 3" << endl;
@@ -2592,7 +2529,7 @@ void t_py_generator::generate_service_remote(t_service* tservice) {
  *
  * @param tservice The service to generate a fuzzer for.
  */
-void t_py_generator::generate_service_fuzzer(t_service* tservice) {
+void t_py_generator::generate_service_fuzzer(t_service* /*tservice*/) {
   string f_fuzzer_name = package_dir_+service_name_+"-fuzzer";
   ofstream f_fuzzer;
   f_fuzzer.open(f_fuzzer_name.c_str());
@@ -2671,6 +2608,14 @@ void t_py_generator::generate_service_server(t_service* tservice,
 
   indent_up();
 
+  f_service_ << indent() << "_onewayMethods = (";
+  for (f_iter = functions.begin(); f_iter != functions.end(); ++f_iter) {
+    if ((*f_iter)->is_oneway()) {
+      f_service_ << "\"" << (*f_iter)->get_name() << "\",";
+    }
+  }
+  f_service_ << ")" << endl << endl;
+
   indent(f_service_) <<
     "def __init__(self, handler):" << endl;
   indent_up();
@@ -2708,6 +2653,18 @@ void t_py_generator::generate_service_server(t_service* tservice,
   indent_down();
   f_service_ << endl;
 
+  f_service_ << indent() << "def onewayMethods(self):" << endl;
+  indent_up();
+  f_service_ << indent() << "l = []" << endl;
+  if (!extends.empty()) {
+    f_service_ << indent() << "l.extend(" << extends << "." << class_prefix
+               << "Processor.onewayMethods(self))" << endl;
+  }
+  f_service_ << indent() << "l.extend(" << class_prefix
+             << "Processor._onewayMethods)" << endl
+             << indent() << "return tuple(l)" << endl << endl;
+  indent_down();
+
   // Generate the server implementation
   if (gen_asyncio_) {
     indent(f_service_) << "@process_main" << endl;
@@ -2736,7 +2693,7 @@ void t_py_generator::generate_service_server(t_service* tservice,
  *
  * @param tfunction The function to write a dispatcher for
  */
-void t_py_generator::generate_process_function(t_service* tservice,
+void t_py_generator::generate_process_function(t_service* /*tservice*/,
                                                t_function* tfunction,
                                                bool with_context) {
   string fn_name = tfunction->get_name();
@@ -2972,7 +2929,7 @@ void t_py_generator::generate_process_function(t_service* tservice,
 void t_py_generator::generate_deserialize_field(ofstream &out,
                                                 t_field* tfield,
                                                 string prefix,
-                                                bool inclass) {
+                                                bool /*inclass*/) {
   t_type* type = get_true_type(tfield->get_type());
 
   if (type->is_void()) {
@@ -3287,7 +3244,7 @@ void t_py_generator::generate_serialize_field(ofstream &out,
  * @param prefix  String prefix to attach to all fields
  */
 void t_py_generator::generate_serialize_struct(ofstream &out,
-                                               t_struct* tstruct,
+                                               t_struct* /*tstruct*/,
                                                string prefix) {
   indent(out) <<
     prefix << ".write(oprot)" << endl;

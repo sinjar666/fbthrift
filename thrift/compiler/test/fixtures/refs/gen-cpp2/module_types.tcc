@@ -233,7 +233,7 @@ uint32_t MyField::read(Protocol_* iprot) {
   xfer += iprot->readStructEnd();
 
   if (!isset_req_value) {
-    throw TProtocolException(TProtocolException::MISSING_REQUIRED_FIELD, "Required field 'req_value' was not foundin serialized data! Struct: MyField");
+    throw TProtocolException(TProtocolException::MISSING_REQUIRED_FIELD, "Required field 'req_value' was not found in serialized data! Struct: MyField");
   }
   return xfer;
 }
@@ -371,7 +371,7 @@ uint32_t MyStruct::read(Protocol_* iprot) {
   xfer += iprot->readStructEnd();
 
   if (!isset_req_ref) {
-    throw TProtocolException(TProtocolException::MISSING_REQUIRED_FIELD, "Required field 'req_ref' was not foundin serialized data! Struct: MyStruct");
+    throw TProtocolException(TProtocolException::MISSING_REQUIRED_FIELD, "Required field 'req_ref' was not found in serialized data! Struct: MyStruct");
   }
   return xfer;
 }
@@ -672,7 +672,7 @@ uint32_t RecursiveStruct::read(Protocol_* iprot) {
       case 1:
       {
         if (ftype == apache::thrift::protocol::T_LIST) {
-          this->mes = std::move(std::vector< ::cpp2::RecursiveStruct>());
+          this->mes = std::vector< ::cpp2::RecursiveStruct>();
           uint32_t _size6;
           apache::thrift::protocol::TType _etype9;
           xfer += iprot->readListBegin(_etype9, _size6);

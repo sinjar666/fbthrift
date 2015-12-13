@@ -27,7 +27,9 @@ module Thrift.Protocol.Compact
     , CompactProtocol(..)
     ) where
 
+#if __GLASGOW_HASKELL__ < 710
 import Control.Applicative
+#endif
 import Control.Exception ( throw )
 import Control.Monad
 import Data.Attoparsec.ByteString as P
@@ -64,6 +66,7 @@ typeShiftAmount :: Int
 typeShiftAmount = 5
 
 instance Protocol CompactProtocol where
+    mkProtocol = CompactProtocol
     getTransport (CompactProtocol t) = t
 
     writeMessage p (n, t, s) = (writeMessageBegin >>)

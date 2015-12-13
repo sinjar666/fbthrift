@@ -31,7 +31,7 @@
 #include <folly/Logging.h>
 #include <folly/MPMCQueue.h>
 #include <folly/Memory.h>
-#include <thrift/lib/cpp/async/Request.h>
+#include <folly/io/async/Request.h>
 #include <thrift/lib/cpp/concurrency/Exception.h>
 #include <thrift/lib/cpp/concurrency/Monitor.h>
 #include <thrift/lib/cpp/concurrency/PosixThreadFactory.h>
@@ -46,7 +46,7 @@ using std::shared_ptr;
 using std::make_shared;
 using std::dynamic_pointer_cast;
 using std::unique_ptr;
-using apache::thrift::async::RequestContext;
+using folly::RequestContext;
 
 /**
  * ThreadManager class
@@ -330,7 +330,7 @@ template <typename SemType>
 void ThreadManager::ImplT<SemType>::add(shared_ptr<Runnable> value,
                                         int64_t timeout,
                                         int64_t expiration,
-                                        bool cancellable,
+                                        bool /*cancellable*/,
                                         bool numa) {
   if (numa) {
     VLOG_EVERY_N(1, 100) << "ThreadManager::add called with numa == true, but "
@@ -404,7 +404,7 @@ bool ThreadManager::ImplT<SemType>::tryAdd(shared_ptr<Runnable> value) {
 }
 
 template <typename SemType>
-void ThreadManager::ImplT<SemType>::remove(shared_ptr<Runnable> task) {
+void ThreadManager::ImplT<SemType>::remove(shared_ptr<Runnable> /*task*/) {
   Synchronized s(monitor_);
   if (state_ != ThreadManager::STARTED) {
     throw IllegalStateException("ThreadManager::Impl::remove ThreadManager not "
@@ -824,7 +824,7 @@ class PriorityThreadManager::PriorityImplT : public PriorityThreadManager {
       return sum(&ThreadManager::expiredTaskCount);
   }
 
-  void remove(std::shared_ptr<Runnable> task) override {
+  void remove(std::shared_ptr<Runnable> /*task*/) override {
     throw IllegalStateException("Not implemented");
   }
 
@@ -845,7 +845,7 @@ class PriorityThreadManager::PriorityImplT : public PriorityThreadManager {
     }
   }
 
-  void setThreadInitCallback(InitCallback initCallback) override {
+  void setThreadInitCallback(InitCallback /*initCallback*/) override {
     throw IllegalStateException("Not implemented");
   }
 

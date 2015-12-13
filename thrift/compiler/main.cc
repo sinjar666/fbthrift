@@ -27,10 +27,10 @@
  *
  */
 
-#include "thrift/compiler/main.h"
+#include <thrift/compiler/main.h>
 
-#include "thrift/compiler/platform.h"
-#include "thrift/compiler/generate/t_generator.h"
+#include <thrift/compiler/platform.h>
+#include <thrift/compiler/generate/t_generator.h>
 
 /**
  * Flags to control code generation
@@ -64,7 +64,7 @@ bool record_genfiles = false;
 /**
  * Diplays the usage message and then exits with an error code.
  */
-void usage() {
+static void usage() {
   fprintf(stderr, "Usage: thrift [options] file\n");
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -o dir      Set the output directory for gen-* packages\n");
@@ -108,8 +108,9 @@ void usage() {
 /**
  * Generate code
  */
-bool generate(t_program* program, const vector<string>& generator_strings,
-              char** argv) {
+static bool generate(t_program* program,
+                     const vector<string>& generator_strings,
+                     char** argv) {
   // Oooohh, recursive code generation, hot!!
   if (gen_recurse) {
     const vector<t_program*>& includes = program->get_includes();
@@ -146,7 +147,7 @@ bool generate(t_program* program, const vector<string>& generator_strings,
           std::vector<std::string> pycompilers = {
             "py/thrift.lpar",
             "py/thrift.par",
-            "../py/thrift.pex",
+            "../py/thrift.par",
           };
           for (const auto& comp : pycompilers) {
             pycompiler = dirname + comp;

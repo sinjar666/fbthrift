@@ -26,11 +26,11 @@
 
 #include <folly/Memory.h>
 #include <folly/io/ShutdownSocketSet.h>
+#include <folly/io/async/EventBaseManager.h>
 #include <wangle/bootstrap/ServerBootstrap.h>
 #include <wangle/concurrent/IOThreadPoolExecutor.h>
-#include <thrift/lib/cpp/async/TAsyncServerSocket.h>
-#include <thrift/lib/cpp/async/TEventBase.h>
-#include <thrift/lib/cpp/async/TEventBaseManager.h>
+#include <folly/io/async/AsyncServerSocket.h>
+#include <folly/io/async/EventBase.h>
 #include <thrift/lib/cpp/concurrency/PosixThreadFactory.h>
 #include <thrift/lib/cpp/concurrency/ThreadManager.h>
 #include <thrift/lib/cpp/server/TServer.h>
@@ -43,33 +43,19 @@
 #include <thrift/lib/cpp2/async/AsyncProcessor.h>
 #include <thrift/lib/cpp2/async/SaslServer.h>
 #include <thrift/lib/cpp2/async/HeaderServerChannel.h>
+#include <thrift/lib/cpp2/server/BaseThriftServer.h>
 
 #include <wangle/ssl/SSLContextConfig.h>
 #include <wangle/acceptor/ServerSocketConfig.h>
 
 namespace apache { namespace thrift {
 
-typedef std::function<void(
-  apache::thrift::async::TEventBase*,
-  std::shared_ptr<apache::thrift::async::TAsyncTransport>,
-  std::unique_ptr<folly::IOBuf>)> getHandlerFunc;
-
 // Forward declaration of classes
 class Cpp2Connection;
 class Cpp2Worker;
 
-template <typename T>
-class ThriftServerAsyncProcessorFactory : public AsyncProcessorFactory {
-  public:
-    explicit ThriftServerAsyncProcessorFactory(std::shared_ptr<T> t) {
-      svIf_ = t;
-    }
-    std::unique_ptr<apache::thrift::AsyncProcessor> getProcessor() override {
-      return std::unique_ptr<apache::thrift::AsyncProcessor> (
-        new typename T::ProcessorType(svIf_.get()));
-    }
-  private:
-    std::shared_ptr<T> svIf_;
+enum class SSLPolicy {
+  DISABLED, PERMITTED, REQUIRED
 };
 
 typedef wangle::Pipeline<
@@ -80,116 +66,55 @@ typedef wangle::Pipeline<
  *   Uses cpp2 style generated code.
  */
 
-class ThriftServer : public apache::thrift::server::TServer
+class ThriftServer : public apache::thrift::BaseThriftServer
                    , public wangle::ServerBootstrap<Pipeline> {
- protected:
-
-  //! Default number of worker threads (should be # of processor cores).
-  static const int T_ASYNC_DEFAULT_WORKER_THREADS;
-
-  static const uint32_t T_MAX_NUM_MESSAGES_IN_QUEUE = 0xffffffff;
-
-  static const std::chrono::milliseconds DEFAULT_TIMEOUT;
-
-  static const std::chrono::milliseconds DEFAULT_TASK_EXPIRE_TIME;
-
-  /// Listen backlog
-  static const int DEFAULT_LISTEN_BACKLOG = 1024;
-
  private:
-  //! Prefix for pool thread names
-  std::string poolThreadName_;
-
   //! SSL context
   std::shared_ptr<wangle::SSLContextConfig> sslContext_;
   folly::Optional<wangle::TLSTicketKeySeeds> ticketSeeds_;
 
-  // Cpp2 ProcessorFactory.
-  std::shared_ptr<apache::thrift::AsyncProcessorFactory> cpp2Pfac_;
-
-  //! The server's listening address
-  folly::SocketAddress address_;
-
-  //! The server's listening port
-  int port_;
-
   // Security negotiation settings
-  bool saslEnabled_;
-  bool nonSaslEnabled_;
+  bool saslEnabled_ = false;
+  bool nonSaslEnabled_ = true;
   const std::string saslPolicy_;
+  SSLPolicy sslPolicy_ = SSLPolicy::PERMITTED;
   const bool allowInsecureLoopback_;
   std::function<std::unique_ptr<SaslServer> (
-    apache::thrift::async::TEventBase*)> saslServerFactory_;
+    folly::EventBase*)> saslServerFactory_;
   std::shared_ptr<apache::thrift::concurrency::ThreadManager>
     saslThreadManager_;
-  int nSaslPoolThreads_;
+  int nSaslPoolThreads_ = 0;
 
-  std::unique_ptr<folly::ShutdownSocketSet> shutdownSocketSet_;
+  std::unique_ptr<folly::ShutdownSocketSet> shutdownSocketSet_ =
+      folly::make_unique<folly::ShutdownSocketSet>();
 
   //! Listen socket
-  apache::thrift::async::TAsyncServerSocket::UniquePtr socket_;
+  folly::AsyncServerSocket::UniquePtr socket_;
 
-  //! The TEventBase currently driving serve().  NULL when not serving.
-  std::atomic<apache::thrift::async::TEventBase*> serveEventBase_;
-
-  //! Number of io worker threads (may be set) (should be # of CPU cores)
-  int nWorkers_;
-
-  //! Number of sync pool threads (may be set) (should be set to expected
-  //  sync load)
-  int nPoolThreads_;
+  //! The folly::EventBase currently driving serve().  NULL when not serving.
+  std::atomic<folly::EventBase*> serveEventBase_{nullptr};
 
   //! Thread stack size in MB
-  int threadStackSizeMB_;
+  int threadStackSizeMB_ = 1;
 
-  //! Milliseconds we'll wait for data to appear (0 = infinity)
-  std::chrono::milliseconds timeout_;
-
-  //! Manager of per-thread TEventBase objects.
-  std::unique_ptr<apache::thrift::async::TEventBaseManager>
-    eventBaseManagerHolder_;
-  apache::thrift::async::TEventBaseManager* eventBaseManager_;
-  std::mutex ebmMutex_;
+  //! Manager of per-thread EventBase objects.
+  folly::EventBaseManager* eventBaseManager_ = folly::EventBaseManager::get();
 
   //! IO thread pool. Drives Cpp2Workers.
-  std::shared_ptr<wangle::IOThreadPoolExecutor> ioThreadPool_;
-
-  /**
-   * The thread manager used for sync calls.
-   */
-  std::mutex threadManagerMutex_;
-  std::shared_ptr<apache::thrift::concurrency::ThreadManager> threadManager_;
-
-  /**
-   * The time in milliseconds before an unperformed task expires
-   * (0 == infinite)
-   */
-  std::chrono::milliseconds taskExpireTime_;
-
-  /**
-   * The number of incoming connections the TCP stack will buffer up while
-   * waiting for the Thrift server to call accept() on them.
-   *
-   * If the Thrift server cannot keep up, and this limit is reached, the
-   * TCP stack will start sending resets to drop excess connections.
-   *
-   * Actual behavior of the socket backlog is dependent on the TCP
-   * implementation, and it may be further limited or even ignored on some
-   * systems. See manpage for listen(2) for details.
-   */
-  int listenBacklog_;
+  std::shared_ptr<wangle::IOThreadPoolExecutor> ioThreadPool_ =
+      std::make_shared<wangle::IOThreadPoolExecutor>(0);
 
   /**
    * The speed for adjusting connection accept rate.
    * 0 for disabling auto adjusting connection accept rate.
    */
-  double acceptRateAdjustSpeed_;
+  double acceptRateAdjustSpeed_ = 0.0;
 
   /**
-   * The maximum number of unprocessed messages which a NotificationQueue
-   * can hold.
+   * Acceptors accept and process incoming connections.  The acceptor factory
+   * helps create acceptors.
    */
-  uint32_t maxNumMsgsInQueue_;
+  std::shared_ptr<wangle::AcceptorFactory> acceptorFactory_;
 
   /**
    * ThreadFactory used to create worker threads
@@ -202,38 +127,15 @@ class ThriftServer : public apache::thrift::server::TServer
 
   void handleSetupFailure(void);
 
-  // Notification of various server events
-  std::shared_ptr<apache::thrift::server::TServerObserver> observer_;
-
-  // Max number of active connections
-  uint32_t maxConnections_;
-
-  // Max active requests
-  uint32_t maxRequests_;
-
-  // If it is set true, # of global active requests is tracked
-  bool isUnevenLoad_;
-
-  // If it is set true, server will check and use client timeout header
-  bool useClientTimeout_;
-
-  // Track # of active requests for this server
-  std::atomic<int32_t> activeRequests_;
-
   // Minimum size of response before it might be compressed
   // Prevents small responses from being compressed,
   // does not by itself turn on compression.  Client must
   // request compression.
-  uint32_t minCompressBytes_;
+  uint32_t minCompressBytes_ = 0;
 
-  std::function<bool(const apache::thrift::transport::THeader*)> isOverloaded_;
-  std::function<int64_t(const std::string&)> getLoad_;
+  bool queueSends_ = true;
 
-  bool queueSends_;
-
-  bool enableCodel_;
-
-  bool stopWorkersOnStopListening_;
+  bool stopWorkersOnStopListening_ = true;
 
   std::shared_ptr<wangle::IOThreadPoolExecutor> acceptPool_;
 
@@ -242,58 +144,17 @@ class ThriftServer : public apache::thrift::server::TServer
   std::shared_ptr<HeaderServerChannel> serverChannel_;
   std::unique_ptr<Cpp2Worker> duplexWorker_;
 
-  bool isDuplex_;   // is server in duplex mode? (used by server)
+  bool isDuplex_ = false;   // is server in duplex mode? (used by server)
 
   mutable std::mutex ioGroupMutex_;
-
-  // Flag indicating whether it is safe to mutate the server config through its
-  // setters.
-  std::atomic<bool> configMutable_{true};
 
   std::shared_ptr<wangle::IOThreadPoolExecutor> getIOGroupSafe() const {
     std::lock_guard<std::mutex> lock(ioGroupMutex_);
     return getIOGroup();
   }
 
-  enum class InjectedFailure {
-    NONE,
-    ERROR,
-    DROP,
-    DISCONNECT
-  };
-
-  class CumulativeFailureInjection {
-   public:
-    CumulativeFailureInjection()
-      : empty_(true),
-        errorThreshold_(0),
-        dropThreshold_(0),
-        disconnectThreshold_(0) {
-    }
-
-    InjectedFailure test() const;
-
-    void set(const FailureInjection& fi);
-
-   private:
-    std::atomic<bool> empty_;
-    mutable std::mutex mutex_;
-    float errorThreshold_;
-    float dropThreshold_;
-    float disconnectThreshold_;
-  };
-
-  // Unlike FailureInjection, this is cumulative and thread-safe
-  CumulativeFailureInjection failureInjection_;
-
   friend class Cpp2Connection;
   friend class Cpp2Worker;
-
-  InjectedFailure maybeInjectFailure() const {
-    return failureInjection_.test();
-  }
-
-  getHandlerFunc getHandler_;
 
  public:
   ThriftServer();
@@ -312,17 +173,6 @@ class ThriftServer : public apache::thrift::server::TServer
       const std::shared_ptr<HeaderServerChannel>& serverChannel);
 
   ~ThriftServer() override;
-
-  /**
-   * Indicate whether it is safe to modify the server config through setters.
-   * This roughly corresponds to whether the IO thread pool could be servicing
-   * requests.
-   *
-   * @return true if the configuration can be modified, false otherwise
-   */
-  bool configMutable() {
-    return configMutable_;
-  }
 
   /**
    * Set the thread pool used to drive the server's IO threads. Note that the
@@ -372,104 +222,6 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   /**
-   * Get the prefix for naming the pool threads.
-   *
-   * @return current setting.
-   */
-  const std::string& getPoolThreadName() const {
-    return poolThreadName_;
-  }
-
-  /**
-   * Set the prefix for naming the pool threads. Not set by default.
-   * must be called before serve() for it to take effect
-   * ignored if setThreadManager() is called.
-   *
-   * @param poolThreadName thread name prefix
-   */
-  void setPoolThreadName(const std::string& poolThreadName) {
-    poolThreadName_ = poolThreadName;
-  }
-
-  /**
-   * Get the maximum # of connections allowed before overload.
-   *
-   * @return current setting.
-   */
-  uint32_t getMaxConnections() const {
-    return maxConnections_;
-  }
-
-  /**
-   * Set the maximum # of connections allowed before overload.
-   *
-   * @param maxConnections new setting for maximum # of connections.
-   */
-  void setMaxConnections(uint32_t maxConnections) {
-    maxConnections_ = maxConnections;
-  }
-
-  /**
-   * Get the maximum # of connections waiting in handler/task before overload.
-   *
-   * @return current setting.
-   */
-  uint32_t getMaxRequests() const {
-    return maxRequests_;
-  }
-
-  /**
-   * Set the maximum # of requests being processed in handler before overload.
-   *
-   * @param maxRequests new setting for maximum # of active requests.
-   */
-  void setMaxRequests(uint32_t maxRequests) {
-    maxRequests_ = maxRequests;
-  }
-
-  /**
-   * Get if the server expects uneven load among workers.
-   *
-   * @return current setting.
-   */
-  bool getIsUnevenLoad() const {
-    return isUnevenLoad_;
-  }
-
-  /**
-   * Set if the server expects uneven load among workers.
-   *
-   * @param isUnevenLoad new setting for the expected load.
-   */
-  void setIsUnevenLoad(bool isUnevenLoad) {
-    isUnevenLoad_ = isUnevenLoad;
-  }
-
-  bool getUseClientTimeout() const {
-    return useClientTimeout_;
-  }
-
-  void setUseClientTimeout(bool useClientTimeout) {
-    useClientTimeout_ = useClientTimeout;
-  }
-
-  void incActiveRequests(int32_t numRequests = 1) {
-    if (isUnevenLoad_) {
-      activeRequests_ += numRequests;
-    }
-  }
-
-  void decActiveRequests(int32_t numRequests = 1) {
-    if (isUnevenLoad_) {
-      activeRequests_ -= numRequests;
-    }
-  }
-
-  int32_t getActiveRequests() const {
-    return activeRequests_;
-  }
-
-  /**
    * Number of connections that epoll says need attention but ThriftServer
    * didn't have a chance to "ack" yet. A rough proxy for a number of pending
    * requests that are waiting to be processed (though it's an imperfect proxy
@@ -477,22 +229,14 @@ class ThriftServer : public apache::thrift::server::TServer
    */
   int32_t getPendingCount() const;
 
-  bool isOverloaded(uint32_t workerActiveRequests = 0,
-                    const apache::thrift::transport::THeader* header = nullptr);
+  virtual bool isOverloaded(uint32_t workerActiveRequests = 0,
+                    const apache::thrift::transport::THeader* header = nullptr) override;
 
   // Get load percent of the server.  Must be a number between 0 and 100:
   // 0 - no load, 100-fully loaded.
-  int64_t getLoad(const std::string& counter = "", bool check_custom = true);
-
-  void setObserver(
-    const std::shared_ptr<apache::thrift::server::TServerObserver>& observer) {
-    observer_ = observer;
-  }
-
-  const std::shared_ptr<apache::thrift::server::TServerObserver>&
-  getObserver() const {
-    return observer_;
-  }
+  int64_t getRequestLoad() override;
+  int64_t getConnectionLoad() override;
+  std::string getLoadInfo(int64_t reqload, int64_t connload, int64_t queueload) override;
 
   void setIOThreadPoolExecutor(
     std::shared_ptr<wangle::IOThreadPoolExecutor> pool) {
@@ -550,7 +294,7 @@ class ThriftServer : public apache::thrift::server::TServer
   void useExistingSocket(int socket);
   void useExistingSockets(const std::vector<int>& sockets);
   void useExistingSocket(
-    apache::thrift::async::TAsyncServerSocket::UniquePtr socket);
+    folly::AsyncServerSocket::UniquePtr socket);
 
   /**
    * Return the file descriptor(s) associated with the listening socket
@@ -558,77 +302,33 @@ class ThriftServer : public apache::thrift::server::TServer
   int getListenSocket() const;
   std::vector<int> getListenSockets() const;
 
-  std::unique_ptr<apache::thrift::AsyncProcessor> getCpp2Processor() {
-    return cpp2Pfac_->getProcessor();
-  }
-
   /**
    * Get the TEventServer's main event base.
    *
-   * @return a pointer to the TEventBase.
+   * @return a pointer to the EventBase.
    */
-  apache::thrift::async::TEventBase* getServeEventBase() const {
+  folly::EventBase* getServeEventBase() const {
     return serveEventBase_;
   }
 
   /**
-   * Get the TEventBaseManager used by this server.  This can be used to find
-   * or create the TEventBase associated with any given thread, including any
+   * Get the EventBaseManager used by this server.  This can be used to find
+   * or create the EventBase associated with any given thread, including any
    * new threads created by clients.  This may be called from any thread.
    *
-   * @return a pointer to the TEventBaseManager.
+   * @return a pointer to the EventBaseManager.
    */
-  apache::thrift::async::TEventBaseManager* getEventBaseManager();
-  const apache::thrift::async::TEventBaseManager* getEventBaseManager() const {
+  folly::EventBaseManager* getEventBaseManager();
+  const folly::EventBaseManager* getEventBaseManager() const {
     return const_cast<ThriftServer*>(this)->getEventBaseManager();
   }
 
-  /**
-   * Set the address to listen on.
-   */
-  void setAddress(const folly::SocketAddress& address) {
-    CHECK(configMutable());
-    port_ = -1;
-    address_ = address;
+  SSLPolicy getSSLPolicy() const {
+    return sslPolicy_;
   }
 
-  void setAddress(folly::SocketAddress&& address) {
-    CHECK(configMutable());
-    port_ = -1;
-    address_ = std::move(address);
-  }
-
-  void setAddress(const char* ip, uint16_t port) {
-    CHECK(configMutable());
-    port_ = -1;
-    address_.setFromIpPort(ip, port);
-  }
-  void setAddress(const std::string& ip, uint16_t port) {
-    CHECK(configMutable());
-    port_ = -1;
-    setAddress(ip.c_str(), port);
-  }
-
-  /**
-   * Get the address the server is listening on.
-   *
-   * This should generally only be called after setup() has finished.
-   *
-   * (The address may be uninitialized until setup() has run.  If called from
-   * another thread besides the main server thread, the caller is responsible
-   * for providing their own synchronization to ensure that setup() is not
-   * modifying the address while they are using it.)
-   */
-  const folly::SocketAddress& getAddress() const {
-    return address_;
-  }
-
-  /**
-   * Set the port to listen on.
-   */
-  void setPort(uint16_t port) {
-    CHECK(configMutable());
-    port_ = port;
+  void setSSLPolicy(SSLPolicy policy) {
+    sslPolicy_ = policy;
   }
 
   /**
@@ -651,13 +351,18 @@ class ThriftServer : public apache::thrift::server::TServer
   // The default SASL implementation can be overridden for testing or
   // other purposes.  Most users will never need to call this.
   void setSaslServerFactory(std::function<std::unique_ptr<SaslServer> (
-      apache::thrift::async::TEventBase*)> func) {
+      folly::EventBase*)> func) {
     saslServerFactory_ = func;
   }
 
   std::function<std::unique_ptr<SaslServer> (
-      apache::thrift::async::TEventBase*)> getSaslServerFactory() {
+      folly::EventBase*)> getSaslServerFactory() {
     return saslServerFactory_;
+  }
+
+  void setAcceptorFactory(
+      const std::shared_ptr<wangle::AcceptorFactory>& acceptorFactory) {
+    acceptorFactory_ = acceptorFactory;
   }
 
   /**
@@ -689,23 +394,6 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   /**
-   * Get the maximum number of unprocessed messages which a NotificationQueue
-   * can hold.
-   */
-  uint32_t getMaxNumMessagesInQueue() const {
-    return maxNumMsgsInQueue_;
-  }
-  /**
-   * Set the maximum number of unprocessed messages in NotificationQueue.
-   * No new message will be sent to that NotificationQueue if there are more
-   * than such number of unprocessed messages in that queue.
-   */
-  void setMaxNumMessagesInQueue(uint32_t num) {
-    CHECK(configMutable());
-    maxNumMsgsInQueue_ = num;
-  }
-
-  /**
    * Get the speed of adjusting connection accept rate.
    */
   double getAcceptRateAdjustSpeed() const {
@@ -721,74 +409,15 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   /**
-   * Get the number of connections dropped by the TAsyncServerSocket
+   * Get the number of connections dropped by the AsyncServerSocket
    */
-  uint64_t getNumDroppedConnections() const;
-
-  /** Get maximum number of milliseconds we'll wait for data (0 = infinity).
-   *
-   *  @return number of milliseconds, or 0 if no timeout set.
-   */
-  std::chrono::milliseconds getIdleTimeout() const {
-    return timeout_;
-  }
-
-  /** Set maximum number of milliseconds we'll wait for data (0 = infinity).
-   *  Note: existing connections are unaffected by this call.
-   *
-   *  @param timeout number of milliseconds, or 0 to disable timeouts.
-   */
-  void setIdleTimeout(std::chrono::milliseconds timeout) {
-    CHECK(configMutable());
-    timeout_ = timeout;
-  }
-
-  /**
-   * Set the number of worker threads
-   *
-   * @param number of worker threads
-   */
-  void setNWorkerThreads(int nWorkers) {
-    CHECK(configMutable());
-    nWorkers_ = nWorkers;
-  }
-
-  /**
-   * Get the number of worker threads
-   *
-   * @return number of worker threads
-   */
-  int getNWorkerThreads() {
-    return nWorkers_;
-  }
+  virtual uint64_t getNumDroppedConnections() const override;
 
   /**
    * Clear all the workers.
    */
   void clearWorkers() {
     ioThreadPool_->join();
-  }
-
-  /**
-   * Set the number of pool threads
-   * Only valid if you do not also set a threadmanager.
-   *
-   * @param number of pool threads
-   */
-  void setNPoolThreads(int nPoolThreads) {
-    CHECK(configMutable());
-    CHECK(!threadManager_);
-
-    nPoolThreads_ = nPoolThreads;
-  }
-
-  /**
-   * Get the number of pool threads
-   *
-   * @return number of pool threads
-   */
-  int getNPoolThreads() {
-    return nPoolThreads_;
   }
 
   /**
@@ -813,54 +442,6 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   /**
-   * Set the processor factory as the one built into the
-   * ServerInterface.
-   *
-   * setInterface() can take both unique_ptr and shared_ptr to handler
-   * interface.
-   *
-   * @param handler interface shared_ptr
-   */
-  void setInterface(std::shared_ptr<ServerInterface> iface) {
-    setProcessorFactory(std::move(iface));
-  }
-
-  /**
-   * Sets an explicit AsyncProcessorFactory
-   *
-   */
-  void setProcessorFactory(
-      std::shared_ptr<AsyncProcessorFactory> pFac) {
-    CHECK(configMutable());
-    cpp2Pfac_ = pFac;
-  }
-
-  /**
-   * Set Thread Manager (for queuing mode).
-   * If not set, defaults to the number of worker threads.
-   *
-   * @param threadManager a shared pointer to the thread manager
-   */
-  void setThreadManager(
-    std::shared_ptr<apache::thrift::concurrency::ThreadManager>
-    threadManager) {
-    CHECK(configMutable());
-    std::lock_guard<std::mutex> lock(threadManagerMutex_);
-    threadManager_ = threadManager;
-  }
-
-  /**
-   * Get Thread Manager (for queuing mode).
-   *
-   * @return a shared pointer to the thread manager
-   */
-  std::shared_ptr<apache::thrift::concurrency::ThreadManager>
-  getThreadManager() {
-    std::lock_guard<std::mutex> lock(threadManagerMutex_);
-    return threadManager_;
-  }
-
-  /**
    * Set whether to stop io workers when stopListening() is called (we do stop
    * them by default).
    */
@@ -874,62 +455,6 @@ class ThriftServer : public apache::thrift::server::TServer
    */
   bool getStopWorkersOnStopListening() const {
     return stopWorkersOnStopListening_;
-  }
-
-  /**
-   * Set the task expire time
-   *
-   */
-  void setTaskExpireTime(std::chrono::milliseconds timeout) {
-    taskExpireTime_ = timeout;
-  }
-
-  /**
-   * Get the task expire time
-   *
-   * @return task expire time
-   */
-  std::chrono::milliseconds getTaskExpireTime() const {
-    return taskExpireTime_;
-  }
-
-  /**
-   * A task has two timeouts:
-   *
-   * If the task hasn't started processing the request by the time the soft
-   * timeout has expired, we should throw the task away.
-   *
-   * However, if the task has started processing the request by the time the
-   * soft timeout has expired, we shouldn't expire the task until the hard
-   * timeout has expired.
-   *
-   * The soft timeout protects the server from starting to process too many
-   * requests.  The hard timeout protects us from sending responses that
-   * are never read.
-   *
-   * @returns whether or not the soft and hard timeouts are different
-   */
-  bool getTaskExpireTimeForRequest(
-    const apache::thrift::transport::THeader& header,
-    std::chrono::milliseconds& softTimeout,
-    std::chrono::milliseconds& hardTimeout
-  ) const;
-
-  /**
-   * Set the listen backlog. Refer to the comment on listenBacklog_ member for
-   * details.
-   */
-  void setListenBacklog(int listenBacklog) {
-    listenBacklog_ = listenBacklog;
-  }
-
-  /**
-   * Get the listen backlog.
-   *
-   * @return listen backlog.
-   */
-  int getListenBacklog() const {
-    return listenBacklog_;
   }
 
   /**
@@ -996,23 +521,6 @@ class ThriftServer : public apache::thrift::server::TServer
   void stopListening() override;
 
   /**
-   * Set a function which determines whether we are currently overloaded. If
-   * we are, the server will return a load-shed response.
-   */
-  void setIsOverloaded(std::function<
-      bool(const apache::thrift::transport::THeader*)> isOverloaded) {
-    isOverloaded_ = isOverloaded;
-  }
-
-  void setGetLoad(std::function<int64_t(const std::string&)> getLoad) {
-    getLoad_ = getLoad;
-  }
-
-  std::function<int64_t(const std::string&)> getGetLoad() {
-    return getLoad_;
-  }
-
-  /**
    * Immediate shutdown of all connections. This is a hard-hitting hammer;
    * all reads and writes will return errors and no new connections will
    * be accepted.
@@ -1045,18 +553,6 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   /**
-   * Codel queuing timeout - limit queueing time before overload
-   * http://en.wikipedia.org/wiki/CoDel
-   */
-  void setEnableCodel(bool enableCodel) {
-    enableCodel_ = enableCodel;
-  }
-
-  bool getEnableCodel() {
-    return enableCodel_;
-  }
-
-  /**
    * Set failure injection parameters.
    */
   void setFailureInjection(FailureInjection fi) override {
@@ -1071,6 +567,13 @@ class ThriftServer : public apache::thrift::server::TServer
     return getHandler_;
   }
 
+  void setGetHeaderHandler(GetHeaderHandlerFunc func) {
+    getHeaderHandler_ = func;
+  }
+
+  GetHeaderHandlerFunc getGetHeaderHandler() {
+    return getHeaderHandler_;
+  }
 
   // client side duplex
   std::shared_ptr<HeaderServerChannel> getDuplexServerChannel() {
@@ -1091,12 +594,12 @@ class ThriftServer : public apache::thrift::server::TServer
   }
 
   const std::vector<std::shared_ptr<folly::AsyncServerSocket>> getSockets()
-    const {
+      const {
     std::vector<std::shared_ptr<folly::AsyncServerSocket>> serverSockets;
     auto sockets = ServerBootstrap::getSockets();
     for (auto& socket : sockets) {
       serverSockets.push_back(
-        std::dynamic_pointer_cast<folly::AsyncServerSocket>(socket));
+          std::dynamic_pointer_cast<folly::AsyncServerSocket>(socket));
     }
     return serverSockets;
   }

@@ -21,8 +21,8 @@
 #include <memory>
 #include <thrift/lib/cpp2/async/MessageChannel.h>
 #include <thrift/lib/cpp/Thrift.h>
-#include <thrift/lib/cpp/async/TEventBase.h>
-#include <thrift/lib/cpp/async/Request.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/Request.h>
 #include <thrift/lib/cpp/concurrency/Thread.h>
 #include <thrift/lib/cpp/EventHandlerBase.h>
 #include <thrift/lib/cpp2/protocol/Protocol.h>
@@ -50,26 +50,27 @@ class ClientReceiveState {
         isStreamEnd_(false) {
   }
 
-  ClientReceiveState(uint16_t protocolId,
-                     std::unique_ptr<folly::IOBuf> buf,
-                     std::unique_ptr<apache::thrift::transport::THeader> header,
-                     std::shared_ptr<apache::thrift::ContextStack> ctx,
-                     bool isSecurityActive,
-                     bool isStreamEnd = false)
-    : protocolId_(protocolId),
-      ctx_(std::move(ctx)),
-      buf_(std::move(buf)),
-      header_(std::move(header)),
-      isSecurityActive_(isSecurityActive),
-      isStreamEnd_(isStreamEnd) {
+  ClientReceiveState(uint16_t _protocolId,
+                    std::unique_ptr<folly::IOBuf> _buf,
+                    std::unique_ptr<apache::thrift::transport::THeader> _header,
+                    std::shared_ptr<apache::thrift::ContextStack> _ctx,
+                    bool _isSecurityActive,
+                    bool _isStreamEnd = false)
+    : protocolId_(_protocolId),
+      ctx_(std::move(_ctx)),
+      buf_(std::move(_buf)),
+      header_(std::move(_header)),
+      isSecurityActive_(_isSecurityActive),
+      isStreamEnd_(_isStreamEnd) {
   }
-  ClientReceiveState(folly::exception_wrapper excw,
-                     std::shared_ptr<apache::thrift::ContextStack> ctx,
-                     bool isSecurityActive)
+  ClientReceiveState(folly::exception_wrapper _excw,
+                     std::shared_ptr<apache::thrift::ContextStack> _ctx,
+                     bool _isSecurityActive)
     : protocolId_(-1),
-      ctx_(std::move(ctx)),
-      excw_(std::move(excw)),
-      isSecurityActive_(isSecurityActive),
+      ctx_(std::move(_ctx)),
+      header_(folly::make_unique<apache::thrift::transport::THeader>()),
+      excw_(std::move(_excw)),
+      isSecurityActive_(_isSecurityActive),
       isStreamEnd_(false) {
   }
 
@@ -124,8 +125,8 @@ class ClientReceiveState {
     return isSecurityActive_;
   }
 
-  void resetCtx(std::shared_ptr<apache::thrift::ContextStack> ctx) {
-    ctx_ = std::move(ctx);
+  void resetCtx(std::shared_ptr<apache::thrift::ContextStack> _ctx) {
+    ctx_ = std::move(_ctx);
   }
 
   bool isStreamEnd() const {
@@ -150,7 +151,7 @@ class RequestCallback {
   virtual void replyReceived(ClientReceiveState&&) = 0;
   virtual void requestError(ClientReceiveState&&) = 0;
 
-  std::shared_ptr<apache::thrift::async::RequestContext> context_;
+  std::shared_ptr<folly::RequestContext> context_;
   // To log latency incurred for doing thrift security
   int64_t securityStart_ = 0;
   int64_t securityEnd_ = 0;
@@ -226,6 +227,10 @@ class RpcOptions {
      chunkTimeout_(0)
   { }
 
+  /**
+   * NOTE: This only sets the receive timeout, and not the send timeout on
+   * transport. Probably you want to use HeaderClientChannel::setTimeout()
+   */
   RpcOptions& setTimeout(std::chrono::milliseconds timeout) {
     timeout_ = timeout;
     return *this;
@@ -265,14 +270,6 @@ class RpcOptions {
     return readHeaders_;
   }
 
-  void setUseForReadHeaders(bool use) {
-    useForReadHeaders_ = use;
-  }
-
-  bool getUseForReadHeaders() {
-    return useForReadHeaders_;
-  }
-
   const std::map<std::string, std::string>& getWriteHeaders() const {
     return writeHeaders_;
   }
@@ -290,17 +287,12 @@ class RpcOptions {
   // For sending and receiving headers.
   std::map<std::string, std::string> writeHeaders_;
   std::map<std::string, std::string> readHeaders_;
-
-  // For sync calls, this flag won't be checked since rpcOptions will always
-  // be in scope. For future calls, if readHeaders is needed, set this flag
-  // before passing it to the call and make sure it doesn't go out of scope.
-  bool useForReadHeaders_{false};
 };
 
 /**
  * RequestChannel defines an asynchronous API for request-based I/O.
  */
-class RequestChannel : virtual public TDelayedDestruction {
+class RequestChannel : virtual public folly::DelayedDestruction {
  protected:
   ~RequestChannel() override {}
 
@@ -359,36 +351,15 @@ class RequestChannel : virtual public TDelayedDestruction {
 
   virtual void setCloseCallback(CloseCallback*) = 0;
 
-  virtual apache::thrift::async::TEventBase* getEventBase() = 0;
+  virtual folly::EventBase* getEventBase() = 0;
 
   virtual uint16_t getProtocolId() = 0;
-
-  // HACK: for backwards compatibility, copy headers that were written
-  // directly to the channel. remove this eventually.
-  void setWriteHeaderThroughChannel(const std::string& k,
-                                    const std::string& v) {
-    writeHeaders_[k] = v;
-  }
-
-  void flushWriteHeaders(apache::thrift::transport::THeader* header) {
-    if (writeHeaders_.empty()) {
-      return;
-    }
-
-    for (auto it = writeHeaders_.begin(); it != writeHeaders_.end(); ++it) {
-      header->setHeader(it->first, it->second);
-    }
-    writeHeaders_.clear();
-  }
-
- private:
-  std::map<std::string, std::string> writeHeaders_;
 };
 
 class ClientSyncCallback : public RequestCallback {
  public:
   ClientSyncCallback(ClientReceiveState* rs,
-                     apache::thrift::async::TEventBase* eb,
+                     folly::EventBase* eb,
                      bool oneway = false)
       : rs_(rs)
       , eb_(eb)
@@ -415,7 +386,7 @@ class ClientSyncCallback : public RequestCallback {
   }
  private:
   ClientReceiveState* rs_;
-  apache::thrift::async::TEventBase* eb_;
+  folly::EventBase* eb_;
   bool oneway_;
 };
 
@@ -468,7 +439,8 @@ static void clientSendT(
     ctx->postWrite(queue.chainLength());
   }
   catch (const apache::thrift::TException &ex) {
-    ctx->handlerError();
+    ctx->handlerErrorWrapped(
+        folly::exception_wrapper(std::current_exception(), ex));
     throw;
   }
 

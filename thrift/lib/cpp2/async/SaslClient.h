@@ -17,11 +17,11 @@
 #ifndef THRIFT_SASLCLIENT_H_
 #define THRIFT_SASLCLIENT_H_ 1
 
-#include <thrift/lib/cpp/async/TEventBase.h>
+#include <folly/io/async/EventBase.h>
 #include <thrift/lib/cpp/transport/TTransportException.h>
 #include <thrift/lib/cpp2/async/SaslEndpoint.h>
 #include <thrift/lib/cpp2/security/SecurityLogger.h>
-#include <thrift/lib/cpp/async/HHWheelTimer.h>
+#include <folly/io/async/HHWheelTimer.h>
 #include <thrift/lib/cpp2/security/KerberosSASLThreadManager.h>
 #include <thrift/lib/cpp2/security/KerberosSASLHandshakeUtils.h>
 #include <thrift/lib/cpp/util/kerberos/Krb5CredentialsCacheManager.h>
@@ -32,7 +32,7 @@ namespace apache { namespace thrift {
 
 class SaslClient : public SaslEndpoint {
  public:
-  class Callback : public apache::thrift::async::HHWheelTimer::Callback {
+  class Callback : public folly::HHWheelTimer::Callback {
    public:
     ~Callback() override {}
 
@@ -60,7 +60,7 @@ class SaslClient : public SaslEndpoint {
   };
 
   explicit SaslClient(
-      apache::thrift::async::TEventBase* evb = nullptr,
+      folly::EventBase* evb = nullptr,
       const std::shared_ptr<SecurityLogger>& logger = nullptr)
     : SaslEndpoint(evb)
     , saslLogger_(logger)

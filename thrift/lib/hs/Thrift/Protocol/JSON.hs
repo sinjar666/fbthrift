@@ -28,7 +28,9 @@ module Thrift.Protocol.JSON
     , JSONProtocol(..)
     ) where
 
+#if __GLASGOW_HASKELL__ < 710
 import Control.Applicative
+#endif
 import Control.Exception
 import Data.Attoparsec.ByteString as P
 import Data.Attoparsec.ByteString.Char8 as PC
@@ -54,6 +56,7 @@ data JSONProtocol t = JSONProtocol t
                       -- ^ Construct a 'JSONProtocol' with a 'Transport'
 
 instance Protocol JSONProtocol where
+    mkProtocol = JSONProtocol
     getTransport (JSONProtocol t) = t
 
     writeMessage (JSONProtocol t) (s, ty, sq) =

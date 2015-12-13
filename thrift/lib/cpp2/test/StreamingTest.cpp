@@ -19,7 +19,7 @@
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp/util/ScopedServerThread.h>
 #include <thrift/lib/cpp2/async/HeaderClientChannel.h>
-#include <thrift/lib/cpp2/TestServer.h>
+#include <thrift/lib/cpp2/test/util/TestThriftServerFactory.h>
 
 using namespace apache::thrift;
 using namespace apache::thrift::test::cpp2;
@@ -165,7 +165,7 @@ TEST(Streaming, GlobalTimeout) {
       },
       [&error](Error e) {
         // onError
-        EXPECT_TRUE(e.with_exception<TTransportException>([](TTransportException& ex) {
+        EXPECT_TRUE(e.with_exception([](TTransportException& ex) {
           EXPECT_EQ(ex.getType(), TTransportException::TIMED_OUT);
         }));
         error = true;
@@ -199,7 +199,7 @@ TEST(Streaming, ChunkTimeout) {
       },
       [&error](Error e) {
         // onError
-        EXPECT_TRUE(e.with_exception<TTransportException>([](TTransportException& ex) {
+        EXPECT_TRUE(e.with_exception([](TTransportException& ex) {
           EXPECT_EQ(ex.getType(), TTransportException::TIMED_OUT);
         }));
         error = true;

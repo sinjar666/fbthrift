@@ -22,7 +22,7 @@
 
 #include <cstdlib>
 #include <vector>
-#include "thrift/compiler/parse/t_type.h"
+#include <thrift/compiler/parse/t_type.h>
 
 /**
  * A thrift base type, which must be one of the defined enumerated types inside
@@ -63,6 +63,10 @@ class t_base_type : public t_type {
 
   bool is_bool() const override { return base_ == TYPE_BOOL; }
 
+  bool is_floating_point() const override {
+    return base_ == TYPE_DOUBLE || base_ == TYPE_FLOAT;
+  }
+
   void set_string_list(bool val) {
     string_list_ = val;
   }
@@ -79,7 +83,7 @@ class t_base_type : public t_type {
     return (base_ == TYPE_STRING) && binary_;
   }
 
-  void set_string_enum(bool val) {
+  void set_string_enum(bool /*val*/) {
     string_enum_ = true;
   }
 

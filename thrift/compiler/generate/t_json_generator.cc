@@ -26,8 +26,8 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sstream>
-#include "thrift/compiler/generate/t_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_generator.h>
+#include <thrift/compiler/platform.h>
 using namespace std;
 
 
@@ -38,8 +38,8 @@ class t_json_generator : public t_generator {
  public:
   t_json_generator(
       t_program* program,
-      const std::map<std::string, std::string>& parsed_options,
-      const std::string& option_string)
+      const std::map<std::string, std::string>& /*parsed_options*/,
+      const std::string& /*option_string*/)
     : t_generator(program)
   {
     out_dir_base_ = "gen-json";
@@ -328,8 +328,9 @@ void t_json_generator::print_const_value(t_const_value* tvalue) {
   case t_const_value::CV_MAP:
     {
       f_out_ << "{ ";
-      map<t_const_value*, t_const_value*> map_elems = tvalue->get_map();
-      map<t_const_value*, t_const_value*>::iterator map_iter;
+      const vector<pair<t_const_value*, t_const_value*>>& map_elems =
+        tvalue->get_map();
+      vector<pair<t_const_value*, t_const_value*>>::const_iterator map_iter;
       for (map_iter = map_elems.begin(); map_iter != map_elems.end();
            map_iter++) {
         if (!first) {

@@ -26,8 +26,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sstream>
-#include "thrift/compiler/generate/t_oop_generator.h"
-#include "thrift/compiler/platform.h"
+#include <thrift/compiler/generate/t_oop_generator.h>
+#include <thrift/compiler/platform.h>
 using namespace std;
 
 
@@ -411,8 +411,8 @@ string t_ocaml_generator::render_const_value(t_type* type, t_const_value* value)
     indent_up();
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
     vector<t_field*>::const_iterator f_iter;
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       t_type* field_type = nullptr;
       for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
@@ -435,14 +435,14 @@ string t_ocaml_generator::render_const_value(t_type* type, t_const_value* value)
   } else if (type->is_map()) {
     t_type* ktype = ((t_map*)type)->get_key_type();
     t_type* vtype = ((t_map*)type)->get_val_type();
-    const map<t_const_value*, t_const_value*>& val = value->get_map();
-    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    const vector<pair<t_const_value*, t_const_value*>>& val = value->get_map();
+    vector<pair<t_const_value*, t_const_value*>>::const_iterator v_iter;
     string hm = tmp("_hm");
     out << endl;
     indent_up();
     indent(out) << "(let " << hm << " = Hashtbl.create " << val.size() << " in" << endl;
     indent_up();
-    for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+    for (auto v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
       string key = render_const_value(ktype, v_iter->first);
       string val = render_const_value(vtype, v_iter->second);
       indent(out) << "Hashtbl.add " << hm << " " << key << " " << val << ";" << endl;
@@ -1597,6 +1597,8 @@ string t_ocaml_generator::type_to_enum(t_type* type) {
       return "Protocol.T_I32";
     case t_base_type::TYPE_I64:
       return "Protocol.T_I64";
+    case t_base_type::TYPE_FLOAT:
+      return "Protocol.T_FLOAT";
     case t_base_type::TYPE_DOUBLE:
       return "Protocol.T_DOUBLE";
     }
@@ -1638,6 +1640,7 @@ string t_ocaml_generator::render_ocaml_type(t_type* type) {
       return "Int32.t";
     case t_base_type::TYPE_I64:
       return "Int64.t";
+    case t_base_type::TYPE_FLOAT:
     case t_base_type::TYPE_DOUBLE:
       return "float";
     }

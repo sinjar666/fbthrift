@@ -17,7 +17,7 @@
 #ifndef THRIFT_ASYNC_CPP2CONNECTION_H_
 #define THRIFT_ASYNC_CPP2CONNECTION_H_ 1
 
-#include <thrift/lib/cpp/async/HHWheelTimer.h>
+#include <folly/io/async/HHWheelTimer.h>
 #include <thrift/lib/cpp/async/TEventConnection.h>
 #include <thrift/lib/cpp/concurrency/Util.h>
 #include <folly/SocketAddress.h>
@@ -99,6 +99,7 @@ class Cpp2Connection
   std::unique_ptr<apache::thrift::AsyncProcessor> processor_;
   std::unique_ptr<DuplexChannel> duplexChannel_;
   std::shared_ptr<apache::thrift::HeaderServerChannel> channel_;
+
   Cpp2Worker* worker_;
   Cpp2Worker* getWorker() {
     return worker_;
@@ -106,6 +107,7 @@ class Cpp2Connection
   Cpp2ConnContext context_;
 
   std::shared_ptr<apache::thrift::async::TAsyncSocket> socket_;
+  std::shared_ptr<apache::thrift::concurrency::ThreadManager> threadManager_;
 
   /**
    * Wrap the request in our own request.  This is done for 2 reasons:
@@ -118,13 +120,13 @@ class Cpp2Connection
     friend class Cpp2Connection;
 
     class SoftTimeout
-      : public apache::thrift::async::HHWheelTimer::Callback {
+      : public folly::HHWheelTimer::Callback {
       Cpp2Request* request_;
       void timeoutExpired() noexcept override;
       friend class Cpp2Request;
     };
     class HardTimeout
-      : public apache::thrift::async::HHWheelTimer::Callback {
+      : public folly::HHWheelTimer::Callback {
       Cpp2Request* request_;
       void timeoutExpired() noexcept override;
       friend class Cpp2Request;
@@ -147,6 +149,7 @@ class Cpp2Connection
         folly::exception_wrapper ew,
         std::string exCode,
         MessageChannel::SendCallback* notUsed = nullptr) override;
+    void sendTimeoutResponse();
 
     ~Cpp2Request() override;
 
@@ -162,6 +165,8 @@ class Cpp2Connection
       return req_->getTimestamps();
     }
 
+    void setLoadHeader();
+
    private:
     MessageChannel::SendCallback* prepareSendCallback(
         MessageChannel::SendCallback* sendCallback,
@@ -170,6 +175,7 @@ class Cpp2Connection
     std::unique_ptr<HeaderServerChannel::HeaderRequest> req_;
     std::shared_ptr<Cpp2Connection> connection_;
     Cpp2RequestContext reqContext_;
+    std::string loadHeader_;
     SoftTimeout softTimeout_;
     HardTimeout hardTimeout_;
 
@@ -205,9 +211,6 @@ class Cpp2Connection
                    TApplicationException::TApplicationExceptionType reason,
                    const char* comment);
   void disconnect(const char* comment) noexcept;
-
-  // Set any error headers necessary, based on the received headers
-  void setErrorHeaders(apache::thrift::transport::THeader* recv_headers);
 
   friend class Cpp2Request;
 
